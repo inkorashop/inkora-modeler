@@ -552,7 +552,19 @@ const Utils = (() => {
     if (c.extruded && c.piece && c.piece.contourIdx !== idx) return false;
     return true;
   }
-  return { toast, palette, isVisibleContour, isPanelContour, parseDecimal, clamp };
+  /* Ray-casting par-impar: ¿el punto (px,py) está dentro del polígono pts? */
+  function pointInPolygon(px, py, pts) {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i].x, yi = pts[i].y;
+      const xj = pts[j].x, yj = pts[j].y;
+      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+  return { toast, palette, isVisibleContour, isPanelContour, parseDecimal, clamp, pointInPolygon };
 })();
 
 
@@ -1343,17 +1355,7 @@ const DXFParser = (() => {
 
      EXTENSIÓN: tolerancia configurable, winding order, huecos anidados.
   ──────────────────────────────────────────────────────────────────────── */
-  function pointInPolygon(px, py, pts) {
-    let inside = false;
-    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      const xi = pts[i].x, yi = pts[i].y;
-      const xj = pts[j].x, yj = pts[j].y;
-      if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  }
+  const pointInPolygon = Utils.pointInPolygon;
 
   function representativePointForShape(shape, fallbackPts) {
     // Para formas cóncavas, el promedio de vértices puede caer fuera del polígono.
@@ -3713,15 +3715,7 @@ const PanelUI = (() => {
   });
 
   function pointInPolygon(pt, poly) {
-    let inside = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const xi = poly[i].x, yi = poly[i].y;
-      const xj = poly[j].x, yj = poly[j].y;
-      const hit = ((yi > pt.y) !== (yj > pt.y)) &&
-        (pt.x < (xj - xi) * (pt.y - yi) / ((yj - yi) || 1e-9) + xi);
-      if (hit) inside = !inside;
-    }
-    return inside;
+    return Utils.pointInPolygon(pt.x, pt.y, poly);
   }
 
   function contourArea(c) {
