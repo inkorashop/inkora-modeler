@@ -2724,11 +2724,13 @@ const Exporter = (() => {
     Utils.toast('Construyendo geometría sólida…', '', 60000);
 
     // 1. Recolectar geometría manifold para cada pieza
+    let failedCount = 0;
     const allGeoms = pieces.map(p => {
       try {
         return collectManifoldGeometry(p);
       } catch(e) {
         console.error('Error en pieza', p.name, e);
+        failedCount++;
         return null;
       }
     });
@@ -2799,6 +2801,8 @@ const Exporter = (() => {
     const a    = document.createElement('a');
     a.href = url; a.download = filename + '.3mf'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+    return { failedCount, totalCount: pieces.length };
   }
 
   return { exportMeshes };
@@ -5262,8 +5266,12 @@ const PanelUI = (() => {
     if(!State.pieces.length)return;
     Utils.toast('Generando 3MF…','',60000);
     try {
-      await Exporter.exportMeshes(State.pieces, State.filename||'inkora-model');
-      Utils.toast('Archivo exportado correctamente.','ok');
+      const result = await Exporter.exportMeshes(State.pieces, State.filename||'inkora-model');
+      if (result && result.failedCount > 0 && result.failedCount < result.totalCount) {
+        Utils.toast(`Exportado con advertencias: ${result.failedCount} de ${result.totalCount} pieza(s) no se pudieron incluir en el archivo.`, 'err');
+      } else {
+        Utils.toast('Archivo exportado correctamente.','ok');
+      }
     } catch(err){Utils.toast('Error al exportar: '+err.message,'err');console.error(err);}
   });
 
