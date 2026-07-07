@@ -2952,13 +2952,10 @@ const TransformModule = (() => {
   /* ── Estado interno ──────────────────────────────── */
   let _activeMesh   = null;   // mesh actualmente transformado
   let _activePiece  = null;   // referencia al piece object
-  let _mode         = 'translate'; // 'translate' | 'scale'
-  let _dragging     = null;   // { axis:'x'|'y'|'z'|'uniform', startMouse, startVal }
   let _scene        = null;
   let _camera       = null;
   let _canvas       = null;
   let _renderer     = null;
-  let _onChanged    = null;   // callback al terminar un drag (para undo)
 
   /* ── init ────────────────────────────────────────── */
   function init(scene, camera, canvas, renderer) {
@@ -2972,23 +2969,6 @@ const TransformModule = (() => {
   }
 
   function deselect() { select(null, null); }
-
-  function setMode(mode) { _mode = mode; }
-
-  /* ── Actualizar posición del gizmo ──────────────────
-     Llamar después de mover el mesh para que el gizmo
-     siga al objeto.                                    */
-  function updateGizmoPosition() { /* no-op: gizmo visual eliminado */ }
-
-  /* ── Raycasting contra handles del gizmo ────────────
-     Retorna { axis } o null. Llamado en mousedown del canvas.
-  ─────────────────────────────────────────────────────── */
-  function hitTest() { return null; }
-
-  /* ── Aplicar transform numérico (desde inputs del panel) ── */
-  function applyFromPanel() {
-    // Panel de transform eliminado.
-  }
 
   /* ── Aplicar transform almacenado al mesh ────────── */
   function _applyToPieceMesh(mesh, piece) {
@@ -3016,69 +2996,9 @@ const TransformModule = (() => {
     // Panel de transform eliminado.
   }
 
-  /* ── Drag: mover con mouse sobre viewport ────────────
-     startDrag / continueDrag / endDrag se llaman desde
-     el controlador principal en mousedown/mousemove/mouseup.
-     Proyecta el delta del mouse al eje del mundo.
-  ─────────────────────────────────────────────────────── */
-  function startDrag(axis, mouseNDC) {
-    if (!_activePiece) return;
-    _dragging = {
-      axis,
-      startMouse: mouseNDC.clone(),
-      startTx:    _activePiece.tx    || 0,
-      startTy:    _activePiece.ty    || 0,
-      startTz:    _activePiece.tz    || 0,
-      startScale: _activePiece.scale || 1,
-    };
-  }
-
-  function continueDrag(mouseNDC) {
-    if (!_dragging || !_activePiece || !_activeMesh) return;
-    const dx = (mouseNDC.x - _dragging.startMouse.x) * 100;
-    const dy = (mouseNDC.y - _dragging.startMouse.y) * 100;
-
-    if (_mode === 'translate') {
-      if (_dragging.axis === 'x') _activePiece.tx = _dragging.startTx + dx;
-      if (_dragging.axis === 'y') _activePiece.ty = _dragging.startTy + dy;
-      if (_dragging.axis === 'z') _activePiece.tz = _dragging.startTz - dy;
-    } else {
-      // Escala: mover a la derecha/arriba = agrandar
-      const delta = (dx - dy) * 0.01;
-      _activePiece.scale = Math.max(0.01, _dragging.startScale + delta);
-    }
-
-    _applyToPieceMesh(_activeMesh, _activePiece);
-    updateGizmoPosition();
-    syncPanel();
-  }
-
-  function endDrag() {
-    if (!_dragging) return;
-    _dragging = null;
-    _onChanged && _onChanged(); // disparar snapshot undo
-  }
-
-  function isDragging() { return !!_dragging; }
-
-  function onChanged(cb) { _onChanged = cb; }
-
-  /* ── Reset transform de la pieza activa ─────────── */
-  function resetActive() {
-    if (!_activePiece || !_activeMesh) return;
-    _activePiece.tx = 0; _activePiece.ty = 0; _activePiece.tz = 0;
-    _activePiece.rotY = 0; _activePiece.scale = 1;
-    _applyToPieceMesh(_activeMesh, _activePiece);
-    updateGizmoPosition();
-    syncPanel();
-    _onChanged && _onChanged();
-  }
-
   return {
-    init, select, deselect, setMode, hitTest,
-    applyFromPanel, restoreTransform, syncPanel, hidePanel,
-    startDrag, continueDrag, endDrag, isDragging,
-    resetActive, onChanged,
+    init, select, deselect,
+    restoreTransform, syncPanel, hidePanel,
   };
 })();
 
