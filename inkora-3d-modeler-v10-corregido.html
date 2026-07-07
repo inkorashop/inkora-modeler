@@ -3746,6 +3746,77 @@ const PanelUI = (() => {
     return Math.abs(local.z) < Math.abs(local.z - absDepth) ? 'bottom' : 'top';
   }
 
+  /* ── Bounding box real de una pieza ──────────────────
+     A diferencia de `new THREE.Box3().setFromObject(mesh)` (usado en
+     viewFaceForContour), toma solo la geometría propia del mesh e
+     ignora las líneas de contorno hijas (que sobresalen ±0.05..0.16
+     más allá de la cara real). Necesario acá porque selectModelExtremeFace
+     compara alturas ENTRE piezas distintas (separadas vs. unidas, cuyos
+     hijos de outline usan offsets distintos) y ese margen inconsistente
+     podría alterar cuál pieza es la "más extrema".
+  ─────────────────────────────────────────────────────── */
+  function getPieceRealBox(piece) {
+    const box = new THREE.Box3();
+    if (!piece?.mesh?.geometry?.attributes?.position) return box;
+    piece.mesh.updateMatrixWorld(true);
+    box.setFromBufferAttribute(piece.mesh.geometry.attributes.position);
+    box.applyMatrix4(piece.mesh.matrixWorld);
+    return box;
+  }
+
+  /* ── Seleccionar todas las caras superiores/inferiores del modelo ──
+     kind:'top'    → contornos cuya cara superior coincide con el punto
+                      más alto (Y máxima) entre todas las piezas 3D.
+     kind:'bottom' → análogo con el punto más bajo (Y mínima).
+     Atajo: Ctrl+1 (superior) / Ctrl+2 (inferior).
+  ─────────────────────────────────────────────────────── */
+  function selectModelExtremeFace(kind = 'top') {
+    const targets = [];
+    let extremeY = kind === 'bottom' ? Infinity : -Infinity;
+
+    State.pieces.forEach(piece => {
+      if (!piece?.mesh || piece.mesh.visible === false) return;
+      const box = getPieceRealBox(piece);
+      if (box.isEmpty()) return;
+      const y = kind === 'bottom' ? box.min.y : box.max.y;
+      extremeY = kind === 'bottom' ? Math.min(extremeY, y) : Math.max(extremeY, y);
+    });
+
+    if (!Number.isFinite(extremeY)) {
+      Utils.toast('No hay piezas 3D para seleccionar esa cara.', 'err');
+      return;
+    }
+
+    const tol = 0.035; // mm: preciso, pero tolerante a redondeos de Three.js
+    State.contours.forEach((c, idx) => {
+      if (!c || c._deleted || !c.extruded || !c.piece || c.piece.mesh.visible === false) return;
+      const box = getPieceRealBox(c.piece);
+      if (box.isEmpty()) return;
+      const y = kind === 'bottom' ? box.min.y : box.max.y;
+      if (Math.abs(y - extremeY) <= tol) targets.push(idx);
+    });
+
+    if (!targets.length) {
+      Utils.toast('No se encontraron contornos en esa cara.', 'err');
+      return;
+    }
+
+    PanelUI.clearAllSelection();
+    targets.forEach(idx => {
+      const c = State.contours[idx];
+      State.selectedIdxs.add(idx);
+      State.selectedFaces.set(idx, kind);
+      if (c && !c.extruded) c.sel2D = true;
+    });
+    PanelUI._syncPieceSelection && PanelUI._syncPieceSelection();
+    PanelUI.refreshContourVisuals();
+    PanelUI.renderList();
+    PanelUI.updateModeBadge();
+    PanelUI.updateColorPanel();
+    const n = targets.length;
+    Utils.toast(`${n} contorno${n !== 1 ? 's' : ''} seleccionado${n !== 1 ? 's' : ''} en la cara ${kind === 'bottom' ? 'inferior' : 'superior'}.`, 'ok', 2200);
+  }
+
   function pickContourOnMergedPiece(hit) {
     if (hit?.contourIdx != null) return hit.contourIdx;
     const piece = State.pieces.find(p => p.mesh === hit?.mesh);
@@ -4042,6 +4113,8 @@ const PanelUI = (() => {
       { id:'selAll',      group:'Selección',  desc:'Seleccionar todo',           key:'a',         ctrl:false, shift:false, alt:false },
       { id:'selNone',     group:'Selección',  desc:'Deseleccionar todo',         key:'Escape',    ctrl:false, shift:false, alt:false },
       { id:'selInvert',   group:'Selección',  desc:'Invertir selección',         key:'i',         ctrl:false, shift:false, alt:false },
+      { id:'selTopFace',    group:'Selección',desc:'Seleccionar caras superiores',key:'1',        ctrl:true,  shift:false, alt:false },
+      { id:'selBottomFace', group:'Selección',desc:'Seleccionar caras inferiores',key:'2',        ctrl:true,  shift:false, alt:false },
       // Operaciones
       { id:'extrude',     group:'Operaciones',desc:'Extruir selección',          key:'e',         ctrl:false, shift:false, alt:false },
       { id:'toggleExtrudeMode',group:'Operaciones',desc:'Alternar modo extrusion',key:'o',        ctrl:false, shift:false, alt:false },
@@ -4257,6 +4330,14 @@ const PanelUI = (() => {
           });
           PanelUI._syncPieceSelection && PanelUI._syncPieceSelection();
           PanelUI.refreshContourVisuals(); PanelUI.renderList(); PanelUI.updateModeBadge();
+          break;
+
+        case 'selTopFace':
+          selectModelExtremeFace('top');
+          break;
+
+        case 'selBottomFace':
+          selectModelExtremeFace('bottom');
           break;
 
         case 'extrude':
