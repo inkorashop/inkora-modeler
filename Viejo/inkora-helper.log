@@ -1,0 +1,111 @@
+﻿2026-05-16 14:35:15  Helper starting. Script=C:\Users\Franco\Desktop\INKORA-3D modeler\inkora-clipboard-helper.ps1
+2026-05-16 14:35:15  ClipWatcher form created
+2026-05-16 14:35:15  Clipboard listener registered: True; Handle=592094
+2026-05-16 14:35:15  Tray icon created
+2026-05-16 14:35:17  Status=Helper activo; Proc=Esperando CorelDRAW; SVG=Sin SVG exportado; Error=
+2026-05-16 14:35:17  Floating panel shown at Left=1112, Top=18, Width=236, Height=81
+2026-05-16 14:35:17  Entering Windows Forms message loop
+2026-05-16 14:35:28  Status=Clipboard detectado; Proc=CorelDRW; SVG=Sin SVG exportado; Error=
+2026-05-16 14:35:28  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:28  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:28  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:28  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:29  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:37  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:37  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:37  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:37  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:37  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:43  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:43  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:43  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:43  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:43  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:44  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:44  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:44  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:44  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:44  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:47  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:47  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:47  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:47  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:47  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:52  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:52  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:53  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:53  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:53  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:58  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:58  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:35:58  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:58  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:35:58  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:40:14  Status=Clipboard detectado; Proc=Code; SVG=Exportando...; Error=
+2026-05-16 14:40:14  Status=Ignorado: no era Corel; Proc=Code; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 14:41:30  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:41:30  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:41:30  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:41:30  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:41:30  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:42:18  Status=Clipboard detectado; Proc=Code; SVG=Exportando...; Error=
+2026-05-16 14:42:18  Status=Ignorado: no era Corel; Proc=Code; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 14:45:46  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:45:46  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:45:46  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:45:46  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:45:46  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:07  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:46:07  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:46:07  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:07  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:07  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:07  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:46:07  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:46:07  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:07  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:07  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:15  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:46:15  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:46:16  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:16  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:16  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:46:29  Status=Clipboard detectado; Proc=chrome; SVG=Exportando...; Error=
+2026-05-16 14:46:29  Status=Ignorado: no era Corel; Proc=chrome; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 14:46:34  Status=Clipboard detectado; Proc=chrome; SVG=Exportando...; Error=
+2026-05-16 14:46:34  Status=Ignorado: no era Corel; Proc=chrome; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 14:47:02  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:47:02  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:47:02  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:47:02  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:47:02  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:38  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:38  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:39  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:39  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:39  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:41  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:42  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:46  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:46  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:46  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:46  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:46  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:56  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:56  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:50:56  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:56  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:50:56  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:51:05  Status=Clipboard detectado; Proc=chrome; SVG=Exportando...; Error=
+2026-05-16 14:51:05  Status=Ignorado: no era Corel; Proc=chrome; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 14:56:43  Status=Clipboard detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:56:43  Status=Corel detectado; Proc=CorelDRW; SVG=Exportando...; Error=
+2026-05-16 14:56:43  ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:56:43  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:56:43  Status=Error Corel COM; Proc=CorelDRW; SVG=Exportando...; Error=Excepción al llamar a "GetActiveObject" con los argumentos "1": "Operación no disponible (Excepción de HRESULT: 0x800401E3 (MK_E_UNAVAILABLE))"
+2026-05-16 14:56:53  Status=Clipboard detectado; Proc=chrome; SVG=Exportando...; Error=
+2026-05-16 14:56:53  Status=Ignorado: no era Corel; Proc=chrome; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 14:56:57  Status=Clipboard detectado; Proc=chrome; SVG=Exportando...; Error=
+2026-05-16 14:56:57  Status=Ignorado: no era Corel; Proc=chrome; SVG=Exportando...; Error=El clipboard cambio desde otra ventana
+2026-05-16 15:02:26  Floating panel closing
+2026-05-16 15:02:26  Windows Forms message loop ended

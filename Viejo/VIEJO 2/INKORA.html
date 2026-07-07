@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>INKORA · Keychain 3D Modeler</title>
+<!-- ==========================================================================
+  INKORA · Modelador 3D de llaveros
+  Importa DXF (archivo o portapapeles desde CorelDRAW), extruye por colores
+  y exporta 3MF multicolor para BambuStudio / OrcaSlicer.
+  Funciona 100% offline: Three.js está embebido en js/vendor/.
+=========================================================================== -->
+<link rel="stylesheet" href="css/inkora.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ═══════════ Barra superior ═══════════ -->
+  <header id="topbar">
+    <div class="logo">INKORA <span>KEYCHAIN 3D</span></div>
+    <div class="sep"></div>
+
+    <button class="btn" id="btn-import" title="Importar archivo DXF (Ctrl+I)">
+      Importar DXF <kbd>Ctrl+I</kbd>
+    </button>
+
+    <div class="history-group">
+      <button class="btn-hist" id="btn-undo" title="Deshacer (Ctrl+Z)" disabled>↶</button>
+      <span id="history-label">—</span>
+      <button class="btn-hist" id="btn-redo" title="Rehacer (Ctrl+Shift+Z)" disabled>↷</button>
+    </div>
+
+    <div class="flex-spacer"></div>
+
+    <button class="btn" id="btn-help" title="Atajos de teclado (?)">Atajos</button>
+    <button class="btn primary" id="btn-export" title="Exportar 3MF multicolor (Ctrl+E)" disabled>
+      Exportar 3MF <kbd>Ctrl+E</kbd>
+    </button>
+  </header>
+
+  <!-- ═══════════ Viewport 3D ═══════════ -->
+  <div id="vp-wrap">
+    <div id="viewport"></div>
+    <div id="drop-hint">
+      <div class="hint-box">
+        <h2>Empezá con tu llavero</h2>
+        <p>
+          <kbd>Ctrl+I</kbd> para importar un archivo DXF<br>
+          o arrastralo a esta ventana<br>
+          o <kbd>Ctrl+V</kbd> directo desde CorelDRAW (macro INKORA)
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ Panel lateral ═══════════ -->
+  <aside id="panel">
+
+    <!-- Extrusión -->
+    <section class="card">
+      <h3>Extrusión</h3>
+      <div class="field-row">
+        <label for="extrude-height">Altura</label>
+        <input type="number" id="extrude-height" value="2" min="0.1" step="0.2">
+        <span class="unit">mm</span>
+      </div>
+      <div class="mode-btns">
+        <button class="mode-btn active" data-mode="separate" title="Cada cara genera una pieza independiente">Separadas</button>
+        <button class="mode-btn" data-mode="merged" title="Toda la selección genera una única pieza unida">Unidas</button>
+      </div>
+      <button class="btn primary block" id="btn-extrude" disabled>
+        Extruir selección <kbd>E</kbd>
+      </button>
+    </section>
+
+    <!-- Selección -->
+    <section class="card">
+      <h3>Selección <span id="sel-count" class="count">nada</span></h3>
+      <div class="quick-row">
+        <button class="btn" id="btn-sel-all" title="A">Todo</button>
+        <button class="btn" id="btn-sel-none" title="Esc">Nada</button>
+        <button class="btn" id="btn-sel-invert" title="Invertir selección (I)">Invertir</button>
+        <button class="btn" id="btn-sel-top" title="Caras superiores de todas las piezas (T, o Ctrl+1)">Caras ▲</button>
+        <button class="btn" id="btn-sel-bottom" title="Caras inferiores de todas las piezas (B, o Ctrl+2)">Caras ▼</button>
+      </div>
+
+      <!-- propiedades de las piezas seleccionadas -->
+      <div id="piece-props" class="hidden">
+        <div class="field-row">
+          <label for="piece-height">Altura pieza</label>
+          <input type="number" id="piece-height" min="0.1" step="0.2">
+          <span class="unit">mm</span>
+        </div>
+        <button class="btn block" id="btn-sel-color" title="C">Color de la selección…</button>
+        <div class="quick-row" style="margin-top:6px">
+          <button class="btn" id="btn-duplicate" title="Duplicar pieza (Ctrl+D)">Duplicar</button>
+          <button class="btn" id="btn-isolate" title="Aislar / mostrar todo (Alt+I)">Aislar</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Elementos -->
+    <section class="card grow">
+      <h3>
+        Elementos <span id="elem-count" class="count"></span>
+        <span class="h-actions">
+          <button class="btn" id="btn-group" title="Agrupar selección (Ctrl+G)">Agrupar</button>
+          <button class="btn" id="btn-ungroup" title="Desagrupar (Ctrl+Shift+G)">Des.</button>
+        </span>
+      </h3>
+      <div id="elem-list"></div>
+    </section>
+
+  </aside>
+
+  <!-- ═══════════ Barra de estado ═══════════ -->
+  <footer id="statusbar">
+    <span id="status-doc">Sin documento</span>
+    <span id="status-hint">
+      <kbd>Ctrl+I</kbd> importar · <kbd>Ctrl+V</kbd> pegar de Corel ·
+      <kbd>E</kbd> extruir · <kbd>F</kbd> encuadrar · <kbd>?</kbd> atajos
+    </span>
+  </footer>
+
+</div>
+
+<!-- ═══════════ Overlays ═══════════ -->
+<input type="file" id="file-input" accept=".dxf,.DXF" hidden>
+<div id="toasts"></div>
+<div id="color-popover" class="hidden"></div>
+
+<div id="modal-help" class="modal hidden">
+  <div class="modal-box">
+    <h2>Atajos de teclado</h2>
+    <div class="shortcut-grid">
+      <kbd>F</kbd><span>Encuadrar escena</span>
+      <kbd>A</kbd><span>Seleccionar todo</span>
+      <kbd>Esc</kbd><span>Deseleccionar todo / cerrar ventanas</span>
+      <kbd>I</kbd><span>Invertir selección</span>
+      <kbd>T</kbd><span>Seleccionar caras superiores de todas las piezas</span>
+      <kbd>B</kbd><span>Seleccionar caras inferiores de todas las piezas</span>
+      <kbd>E</kbd><span>Extruir selección</span>
+      <kbd>O</kbd><span>Alternar modo de extrusión (separadas / unidas)</span>
+      <kbd>C</kbd><span>Color de la selección (junto al cursor)</span>
+      <kbd>Supr</kbd><span>Eliminar selección (piezas o caras)</span>
+      <kbd>H</kbd><span>Ocultar / mostrar selección</span>
+      <kbd>Alt + I</kbd><span>Aislar selección (Alt+I de nuevo: mostrar todo)</span>
+      <kbd>F2</kbd><span>Renombrar el elemento seleccionado</span>
+      <kbd>Ctrl + Z</kbd><span>Deshacer</span>
+      <kbd>Ctrl + Shift + Z</kbd><span>Rehacer</span>
+      <kbd>Ctrl + G</kbd><span>Agrupar selección</span>
+      <kbd>Ctrl + U</kbd><span>Desagrupar</span>
+      <kbd>Ctrl + D</kbd><span>Duplicar pieza seleccionada</span>
+      <kbd>Ctrl + I</kbd><span>Importar archivo DXF</span>
+      <kbd>Ctrl + V</kbd><span>Pegar vector desde CorelDRAW (macro INKORA)</span>
+      <kbd>Ctrl + E</kbd><span>Exportar 3MF multicolor</span>
+      <kbd>Shift + clic</kbd><span>Sumar a la selección</span>
+      <kbd>Ctrl + clic</kbd><span>Alternar selección</span>
+    </div>
+    <p class="modal-note">
+      Navegación: arrastrar con botón izquierdo = orbitar · botón derecho o
+      Shift+izquierdo = panear · rueda = zoom al cursor.<br>
+      Re-extrusión: seleccioná la cara superior o inferior de una pieza ya
+      extruida y presioná <b>E</b> — la nueva pieza conserva todos los
+      agujeros interiores.<br>
+      <b>Ctrl+1</b> / <b>Ctrl+2</b> (caras superiores/inferiores) quedan
+      definidos igual que en la versión anterior, pero todos los
+      navegadores los reservan para cambiar de pestaña y nunca llegan a la
+      página — usá <b>T</b> / <b>B</b>, que hacen lo mismo y sí funcionan.
+    </p>
+  </div>
+</div>
+
+<!-- ═══════════ Scripts (el orden importa) ═══════════ -->
+<script src="js/vendor/three.min.js"></script>
+<script src="js/utils.js"></script>
+<script src="js/dxf.js"></script>
+<script src="js/topology.js"></script>
+<script src="js/model.js"></script>
+<script src="js/history.js"></script>
+<script src="js/exporter.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/viewport.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+
+</body>
+</html>
