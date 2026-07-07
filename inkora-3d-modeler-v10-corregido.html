@@ -410,6 +410,14 @@ html.light{--bg:#f0f0f0;--surface:#ffffff;--surface2:#e8e8ec;--surface3:#dddde8;
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Importar DXF
     </button>
+    <button class="btn" id="btn-open-project" title="Abrir proyecto INKORA 3D (Ctrl+O)">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9.5h8V4.2H6.2L5.1 3H2v6.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+      Abrir proyecto
+    </button>
+    <button class="btn" id="btn-save-project" disabled title="Guardar proyecto completo (Ctrl+S)">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.2 2h6.2L10 3.6V10H2.2V2zM4 2v3h4V2M4 10V7h4v3" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+      Guardar proyecto
+    </button>
     <button class="btn primary" id="btn-extrude" disabled>
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 9V3M3.5 5.5L6 3l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Extruir
@@ -448,6 +456,7 @@ html.light{--bg:#f0f0f0;--surface:#ffffff;--surface2:#e8e8ec;--surface3:#dddde8;
       </div>
     </div>
     <input type="file" id="file-input" accept=".dxf" style="display:none">
+    <input type="file" id="project-input" accept=".inkora3d,.json" style="display:none">
   </header>
 
   <div id="vp-wrap">
@@ -2930,7 +2939,7 @@ const History = (() => {
   ─────────────────────────────────────────────────────── */
   function clear() { stack = []; cursor = -1; _onChange && _onChange(); }
 
-  return { push, undo, redo, canUndo, canRedo, label, onChange, clear };
+  return { push, undo, redo, canUndo, canRedo, label, onChange, clear, snapshot };
 })();
 
 
@@ -3575,6 +3584,7 @@ const PanelUI = (() => {
     document.getElementById('btn-extrude').disabled = !has2D && !has3D;
     document.getElementById('btn-export').disabled=!State.pieces.length;
     document.getElementById('btn-clear').disabled=!State.contours.length;
+    document.getElementById('btn-save-project').disabled=!State.contours.length;
   }
   function updateModeBadge(){
     const badge=document.getElementById('mode-badge');
@@ -4085,6 +4095,155 @@ const PanelUI = (() => {
     PanelUI.updateColorPanel();
   }
 
+  /* ══════════════════════════════════════════════════════
+     GUARDAR / ABRIR PROYECTO LOCAL (.inkora3d)
+     Guarda el estado lógico completo reutilizando la misma
+     serialización que History.snapshot() (undo/redo), más los
+     valores del panel y el modo de extrusión. Al abrir, la
+     reconstrucción reusa restoreSnapshot() — el mismo camino ya
+     probado por cada undo/redo.
+     ══════════════════════════════════════════════════════ */
+  function _stripClosingPoint(points) {
+    const out = points.map(p => ({ x: +p.x, y: +p.y }));
+    if (out.length > 1) {
+      const a = out[0], b = out[out.length - 1];
+      if (Math.abs(a.x - b.x) < 1e-8 && Math.abs(a.y - b.y) < 1e-8) out.pop();
+    }
+    return out;
+  }
+
+  function serializePathLike(pathLike) {
+    return _stripClosingPoint(pathLike.getPoints(96));
+  }
+
+  function serializeShape(shape) {
+    return {
+      kind: 'polygon-v1',
+      points: serializePathLike(shape),
+      holes: (shape.holes || []).map(h => serializePathLike(h)),
+    };
+  }
+
+  function pathFromPoints(points, asShape = false) {
+    const pts = (points || []).filter(p => Number.isFinite(+p.x) && Number.isFinite(+p.y));
+    const path = asShape ? new THREE.Shape() : new THREE.Path();
+    if (!pts.length) return path;
+    path.moveTo(+pts[0].x, +pts[0].y);
+    for (let i = 1; i < pts.length; i++) path.lineTo(+pts[i].x, +pts[i].y);
+    path.closePath();
+    path.autoClose = true;
+    return path;
+  }
+
+  function deserializeShape(data) {
+    if (!data || !Array.isArray(data.points) || data.points.length < 3) {
+      throw new Error('El proyecto contiene un contorno inválido.');
+    }
+    const shape = pathFromPoints(data.points, true);
+    (data.holes || []).forEach(holePts => {
+      if (Array.isArray(holePts) && holePts.length >= 3) shape.holes.push(pathFromPoints(holePts, false));
+    });
+    return shape;
+  }
+
+  function sanitizeLocalFileName(name, ext) {
+    let clean = String(name || 'inkora-project')
+      .replace(/\.[^.]+$/i, '')
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!clean) clean = 'inkora-project';
+    return `${clean}${ext}`;
+  }
+
+  async function saveProject() {
+    const snap = History.snapshot(State);
+    const payload = {
+      app: 'INKORA 3D Modeler',
+      format: 'inkora3d-project',
+      formatVersion: 1,
+      savedAt: new Date().toISOString(),
+      snapshot: {
+        ...snap,
+        extrudeMode: State.extrudeMode,
+        panel: {
+          depth: document.getElementById('ex-depth').value,
+          bevel: document.getElementById('ex-bevel').value,
+          bevelSeg: document.getElementById('ex-bseg').value,
+        },
+        contours: snap.contours.map(c => ({ ...c, shape: serializeShape(c.shape) })),
+      },
+    };
+    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json;charset=utf-8' });
+    const safeName = sanitizeLocalFileName(State.filename || 'inkora-project', '.inkora3d');
+
+    // File System Access API: sobrescribe con diálogo nativo si el navegador lo soporta.
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: safeName,
+          types: [{ description: 'Proyecto INKORA 3D', accept: { 'application/json': ['.inkora3d'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        Utils.toast('Proyecto guardado correctamente.', 'ok');
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return; // el usuario canceló el diálogo
+        console.warn('No se pudo usar el selector de guardado, se usará descarga normal.', err);
+      }
+    }
+    // Fallback: descarga normal del navegador.
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = safeName; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    Utils.toast('Proyecto guardado correctamente.', 'ok');
+  }
+
+  async function loadProjectFile(file) {
+    Utils.toast('Abriendo proyecto…', '', 60000);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const rawSnap = data.snapshot || data;
+      if (!rawSnap || !Array.isArray(rawSnap.contours)) throw new Error('Formato de proyecto inválido.');
+      const snap = {
+        filename: rawSnap.filename || file.name.replace(/\.(inkora3d|json)$/i, '') || 'inkora-project',
+        groups: Array.isArray(rawSnap.groups) ? rawSnap.groups.map(g => ({ ...g, memberIdxs: [...(g.memberIdxs || [])] })) : [],
+        _nextGroupId: rawSnap._nextGroupId || 1,
+        contours: rawSnap.contours.map(sc => ({ ...sc, shape: deserializeShape(sc.shape) })),
+      };
+      History.clear();
+      restoreSnapshot(snap);
+      if (rawSnap.extrudeMode) setExtrudeMode(rawSnap.extrudeMode, false);
+      if (rawSnap.panel) {
+        const dEl = document.getElementById('ex-depth'), bEl = document.getElementById('ex-bevel'), bsEl = document.getElementById('ex-bseg');
+        if (dEl && rawSnap.panel.depth != null) dEl.value = rawSnap.panel.depth;
+        if (bEl && rawSnap.panel.bevel != null) bEl.value = rawSnap.panel.bevel;
+        if (bsEl && rawSnap.panel.bevelSeg != null) bsEl.value = rawSnap.panel.bevelSeg;
+      }
+      History.push(State);
+      Viewport.focusAll();
+      Utils.toast('Proyecto abierto correctamente.', 'ok');
+    } catch (err) {
+      Utils.toast('Error al abrir el proyecto: ' + err.message, 'err');
+      console.error(err);
+    }
+  }
+
+  document.getElementById('btn-save-project').addEventListener('click', async () => {
+    if (!State.contours.length) { Utils.toast('No hay proyecto para guardar.', 'err'); return; }
+    try { await saveProject(); }
+    catch (err) { Utils.toast('Error al guardar: ' + err.message, 'err'); console.error(err); }
+  });
+  document.getElementById('btn-open-project').addEventListener('click', () => document.getElementById('project-input').click());
+  document.getElementById('project-input').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (f) { await loadProjectFile(f); e.target.value = ''; }
+  });
+
   btnUndo.addEventListener('click', () => {
     const snap = History.undo();
     if (snap) { restoreSnapshot(snap); Utils.toast('Deshecho.'); }
@@ -4131,6 +4290,8 @@ const PanelUI = (() => {
       { id:'ungroup',     group:'Grupos',     desc:'Desagrupar',                  key:'u',         ctrl:true,  shift:false, alt:false },
       // Archivo
       { id:'import',      group:'Archivo',    desc:'Importar DXF',               key:'i',         ctrl:true,  shift:false, alt:false },
+      { id:'openProject', group:'Archivo',    desc:'Abrir proyecto',             key:'o',         ctrl:true,  shift:false, alt:false },
+      { id:'saveProject', group:'Archivo',    desc:'Guardar proyecto',           key:'s',         ctrl:true,  shift:false, alt:false },
       { id:'export',      group:'Archivo',    desc:'Exportar 3MF',               key:'e',         ctrl:true,  shift:false, alt:false },
     ];
 
@@ -4579,6 +4740,14 @@ const PanelUI = (() => {
 
         case 'import':
           document.getElementById('file-input').click();
+          break;
+
+        case 'openProject':
+          document.getElementById('btn-open-project').click();
+          break;
+
+        case 'saveProject':
+          if (State.contours.length) document.getElementById('btn-save-project').click();
           break;
 
         case 'export':
