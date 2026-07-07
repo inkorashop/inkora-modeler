@@ -4613,10 +4613,12 @@ const PanelUI = (() => {
         sc = { id: 'selAll' };
       }
       if (!sc) return;
-      // Teclas de flecha y otras que el browser usa por defecto → prevenir
-      const preventKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab','Escape','f','a','e','d','c','o','h','i','g','r','s'];
-      if (preventKeys.includes(e.key)) e.preventDefault();
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') e.preventDefault();
+      // Teclas de flecha y otras que el browser usa por defecto → prevenir.
+      // Cualquier combinación con Ctrl/Cmd también se previene: si llegamos
+      // hasta acá es porque `sc` matcheó un atajo real de la app, así que
+      // el navegador no debe interceptarlo (ej. Ctrl+1/2 → cambio de pestaña).
+      const preventKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab','Escape','f','a','e','d','c','o','h','i','g','r','s','1','2'];
+      if (preventKeys.includes(e.key) || e.ctrlKey || e.metaKey) e.preventDefault();
       execAction(sc.id);
     }
 
