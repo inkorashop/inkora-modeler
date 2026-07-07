@@ -2160,7 +2160,32 @@ const GeoModule = (() => {
 
     return mesh;
   }
-  return {makeFlat,makeOutline,extrude,resetCounter};
+
+  /* ── makePiece ───────────────────────────────────────
+     Construye el objeto "piece" estándar (mesh + metadata de
+     extrusión/transform) usado por todos los sitios que crean o
+     reconstruyen piezas (extrusión, merge, duplicado, snapshots).
+     _sourceContourIdx y _mergedSourceIdxs son opcionales: los sitios
+     que no los usan simplemente no los pasan (quedan en su default).
+  ─────────────────────────────────────────────────────────────── */
+  function makePiece({
+    mesh, name, color, contourIdx,
+    depth, bevel, bevelSeg,
+    baseX, baseY, baseZ,
+    tx = 0, ty = 0, tz = 0, rotY = 0, scale = 1,
+    holeIdxs = [], mergedSourceIdxs = [], sourceContourIdx = null,
+  }) {
+    return {
+      mesh, name, color, contourIdx,
+      _depth: depth, _bevel: bevel, _bevelSeg: bevelSeg,
+      _holeIdxs: holeIdxs,
+      _mergedSourceIdxs: mergedSourceIdxs,
+      _sourceContourIdx: sourceContourIdx,
+      tx, ty, tz, rotY, scale,
+      _baseX: baseX, _baseY: baseY, _baseZ: baseZ,
+    };
+  }
+  return {makeFlat,makeOutline,extrude,resetCounter,makePiece};
 })();
 
 
@@ -3873,19 +3898,19 @@ const PanelUI = (() => {
           mesh.position.y = pd.baseY !== undefined ? pd.baseY : mesh.position.y;
           mesh.position.z = pd.baseZ !== undefined ? pd.baseZ : mesh.position.z;
           Viewport.add3D(mesh);
-          const piece = {
+          const piece = GeoModule.makePiece({
             mesh, name: pd.name, color: pd.color,
             contourIdx: i,
-            _depth: pd.depth, _bevel: pd.bevel, _bevelSeg: pd.bevelSeg,
-            _holeIdxs: pd.holeIdxs || [],
-            _mergedSourceIdxs: pd.mergedSourceIdxs || [],
-            _sourceContourIdx: pd.sourceContourIdx ?? null,
+            depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg,
+            holeIdxs: pd.holeIdxs || [],
+            mergedSourceIdxs: pd.mergedSourceIdxs || [],
+            sourceContourIdx: pd.sourceContourIdx ?? null,
             tx: pd.tx || 0, ty: pd.ty || 0, tz: pd.tz || 0,
             rotY: pd.rotY || 0, scale: pd.scale || 1,
-            _baseX: pd.baseX !== undefined ? pd.baseX : mesh.position.x,
-            _baseY: pd.baseY !== undefined ? pd.baseY : mesh.position.y,
-            _baseZ: pd.baseZ !== undefined ? pd.baseZ : mesh.position.z,
-          };
+            baseX: pd.baseX !== undefined ? pd.baseX : mesh.position.x,
+            baseY: pd.baseY !== undefined ? pd.baseY : mesh.position.y,
+            baseZ: pd.baseZ !== undefined ? pd.baseZ : mesh.position.z,
+          });
           State.pieces.push(piece);
           pieceByContourIdx.set(i, piece);
           contour.piece = piece;
@@ -3932,21 +3957,21 @@ const PanelUI = (() => {
           })), pd.depth);
         }
         Viewport.add3D(mesh);
-        const piece = {
+        const piece = GeoModule.makePiece({
           mesh, name: pd.name, color: pd.color,
           contourIdx: i,
-          _depth: pd.depth, _bevel: pd.bevel, _bevelSeg: pd.bevelSeg,
-          _holeIdxs: pd.holeIdxs || [],
-          _mergedSourceIdxs: pd.mergedSourceIdxs || [],
-          _sourceContourIdx: pd.sourceContourIdx ?? null,
+          depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg,
+          holeIdxs: pd.holeIdxs || [],
+          mergedSourceIdxs: pd.mergedSourceIdxs || [],
+          sourceContourIdx: pd.sourceContourIdx ?? null,
           // Restaurar transform guardado en snapshot
           tx: pd.tx || 0, ty: pd.ty || 0, tz: pd.tz || 0,
           rotY: pd.rotY || 0, scale: pd.scale || 1,
           // Posición base restaurada del snapshot (posición sin transform del usuario)
-          _baseX: pd.baseX !== undefined ? pd.baseX : mesh.position.x,
-          _baseY: pd.baseY !== undefined ? pd.baseY : mesh.position.y,
-          _baseZ: pd.baseZ !== undefined ? pd.baseZ : mesh.position.z,
-        };
+          baseX: pd.baseX !== undefined ? pd.baseX : mesh.position.x,
+          baseY: pd.baseY !== undefined ? pd.baseY : mesh.position.y,
+          baseZ: pd.baseZ !== undefined ? pd.baseZ : mesh.position.z,
+        });
         State.pieces.push(piece);
         pieceByContourIdx.set(i, piece);
         contour.piece = piece;
@@ -4277,21 +4302,21 @@ const PanelUI = (() => {
           });
           Viewport.add3D(newMesh);
 
-          const newPiece = {
+          const newPiece = GeoModule.makePiece({
             mesh: newMesh,
             name: src.name + ' (copia)',
             color: src.color,
             contourIdx: firstNewIdx,
-            _sourceContourIdx: src._sourceContourIdx ?? sourceIdxs[0],
-            _depth: src._depth, _bevel: src._bevel, _bevelSeg: src._bevelSeg,
-            _baseX: src._baseX ?? src.mesh.position.x,
-            _baseY: src._baseY ?? src.mesh.position.y,
-            _baseZ: src._baseZ ?? src.mesh.position.z,
+            sourceContourIdx: src._sourceContourIdx ?? sourceIdxs[0],
+            depth: src._depth, bevel: src._bevel, bevelSeg: src._bevelSeg,
+            baseX: src._baseX ?? src.mesh.position.x,
+            baseY: src._baseY ?? src.mesh.position.y,
+            baseZ: src._baseZ ?? src.mesh.position.z,
             tx: (src.tx||0)+5, ty: src.ty||0, tz: src.tz||0,
             rotY: src.rotY||0, scale: src.scale||1,
-            _holeIdxs: src._holeIdxs ? [...src._holeIdxs] : [],
-            _mergedSourceIdxs: newIdxs.length > 1 ? newIdxs : [],
-          };
+            holeIdxs: src._holeIdxs ? [...src._holeIdxs] : [],
+            mergedSourceIdxs: newIdxs.length > 1 ? newIdxs : [],
+          });
 
           sourceIdxs.forEach((srcIdx, i) => {
             const sc = State.contours[srcIdx] || srcC;
@@ -5002,13 +5027,12 @@ const PanelUI = (() => {
         if (candidate.depth !== c.depth + 1) return;
         holeIdxs.push(cidx);
       });
-      const piece = {
+      const piece = GeoModule.makePiece({
         mesh, name, color, contourIdx: cIdx,
-        _depth: (c.depthOverride ?? extDepth), _bevel:bevel, _bevelSeg:bseg,
-        _baseX: mesh.position.x, _baseY: mesh.position.y, _baseZ: mesh.position.z,
-        tx:0, ty:0, tz:0, rotY:0, scale:1,
-        _holeIdxs: Array.from(new Set(holeIdxs)),
-      };
+        depth: (c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
+        baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
+        holeIdxs: Array.from(new Set(holeIdxs)),
+      });
       State.pieces.push(piece);
       c.extruded=true; c.sel2D=false; c.piece=piece;
       if(c.flatMesh) c.flatMesh.visible=false;
@@ -5027,14 +5051,13 @@ const PanelUI = (() => {
       addMergedContourPickLines(mesh, mergedItems, (primary.c.depthOverride ?? extDepth));
       Viewport.add3D(mesh);
       const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
-      const piece = {
+      const piece = GeoModule.makePiece({
         mesh, name, color: primary.color, contourIdx: primary.cIdx,
-        _depth: (primary.c.depthOverride ?? extDepth), _bevel:bevel, _bevelSeg:bseg,
-        _baseX: mesh.position.x, _baseY: mesh.position.y, _baseZ: mesh.position.z,
-        tx:0, ty:0, tz:0, rotY:0, scale:1,
-        _holeIdxs: Array.from(new Set(mergedItems.flatMap(item => item.holeIdxs))),
-        _mergedSourceIdxs: mergedItems.map(item => item.cIdx),
-      };
+        depth: (primary.c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
+        baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
+        holeIdxs: Array.from(new Set(mergedItems.flatMap(item => item.holeIdxs))),
+        mergedSourceIdxs: mergedItems.map(item => item.cIdx),
+      });
       State.pieces.push(piece);
       mergedItems.forEach((item, idx) => {
         item.c.extruded=true; item.c.sel2D=false; item.c.piece=piece; item.c._panelHidden = idx !== 0;
@@ -5147,16 +5170,15 @@ const PanelUI = (() => {
         const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
         const firstContourIdx = State.contours.length;
         const newIdxs = items.map((_, i) => firstContourIdx + i);
-        const piece = {
+        const piece = GeoModule.makePiece({
           mesh, name, color,
           contourIdx: firstContourIdx,
-          _sourceContourIdx: primary.idx,
-          _depth: depth, _bevel: bevel, _bevelSeg: bseg,
-          _baseX: mesh.position.x, _baseY: mesh.position.y, _baseZ: mesh.position.z,
-          tx:0, ty:0, tz:0, rotY:0, scale:1,
-          _holeIdxs: Array.from(new Set(items.flatMap(item => item.holeIdxs || []))),
-          _mergedSourceIdxs: newIdxs,
-        };
+          sourceContourIdx: primary.idx,
+          depth, bevel, bevelSeg: bseg,
+          baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
+          holeIdxs: Array.from(new Set(items.flatMap(item => item.holeIdxs || []))),
+          mergedSourceIdxs: newIdxs,
+        });
         addMergedContourPickLines(mesh, items.map((item, i) => ({ c: item.c, cIdx: newIdxs[i] })), depth);
         Viewport.add3D(mesh);
         State.pieces.push(piece);
@@ -5187,15 +5209,14 @@ const PanelUI = (() => {
       Viewport.add3D(mesh);
       const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
       const newContourIdx = State.contours.length;
-      const piece = {
+      const piece = GeoModule.makePiece({
         mesh, name, color: c.color || srcPiece.color || extrudeColor,
         contourIdx: newContourIdx,
-        _sourceContourIdx: idx,
-        _depth: depth, _bevel: bevel, _bevelSeg: bseg,
-        _baseX: mesh.position.x, _baseY: mesh.position.y, _baseZ: mesh.position.z,
-        tx:0, ty:0, tz:0, rotY:0, scale:1,
-        _holeIdxs: Array.from(new Set(item.holeIdxs || [])),
-      };
+        sourceContourIdx: idx,
+        depth, bevel, bevelSeg: bseg,
+        baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
+        holeIdxs: Array.from(new Set(item.holeIdxs || [])),
+      });
       State.pieces.push(piece);
       // Crear contorno para la nueva pieza (ficticio: sin flatMesh/outlineMesh)
       // depthOverride: null asegura que restoreSnapshot lo trate correctamente
