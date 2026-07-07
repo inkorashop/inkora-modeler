@@ -3226,6 +3226,7 @@ const PanelUI = (() => {
       count.textContent = '(0)';
       selAllRow.style.display = 'none';
       [...wrap.children].forEach(ch => { if (ch !== empty) ch.remove(); });
+      updateSelCount(); updateHUD(); updateButtons();
       return;
     }
 
