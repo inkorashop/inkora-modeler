@@ -2303,51 +2303,20 @@ const Exporter = (() => {
       const sx = pos2D.getX(i); // coordenada X del shape
       const sy = pos2D.getY(i); // coordenada Y del shape
 
-      // Convertir a world-space Three.js y luego a 3MF
-      // En Three.js world: mesh.rotation.x = -PI/2, mesh.position = (-offX, baseY, offZ)
-      // Entonces: x_world = sx - offX,  y_world = baseY (o topY),  z_world = -(sy - 0) + ... 
-      // Simplificado aplicando matrixWorld analíticamente:
-      // x_3mf = x_world = sx - offX
-      // y_3mf = -z_world = sy - ... (ver abajo)
-      // z_3mf = y_world = baseY o topY
-
-      // ShapeGeometry usa las coordenadas del shape directamente.
-      // offX y offZ son la posición del mesh en world-space.
-      // La rotación rotation.x = -PI/2 transforma:
-      //   local (x, y, 0) → world (x - offX, 0, -y + offZ) para baseY=0
-      //   3MF: x' = x-offX,  y' = -z_world = y - offZ? 
-      // 
-      // En realidad, el mesh se posiciona como:
-      //   mesh.position = (-offX, baseY, offZ)  [Three.js world]
-      //   donde offX = c.offX (shape offset), offZ = c.offY (shape offset Y)
-      // Y rotation.x=-PI/2 transforma local→world:
-      //   P_world = mesh.matrixWorld * P_local
-      //   P_local = (sx, sy, 0) para la cara inferior
-      //   x_world = sx - offX
-      //   y_world = baseY + 0 (z_local=0 tras rotacion: sin(-PI/2)*sy + cos(-PI/2)*0 + baseY)
-      //           = baseY - sy*sin(PI/2) ... 
-      //
-      // Usamos directamente la matrixWorld que ya calculamos en collectThreeGeometry.
-      // Aquí tomamos el camino más simple: extraer los puntos ya en world-space
-      // de la geometría de ShapeGeometry y aplicar solo la conversión Y-up→Z-up.
-
-      // Para la cara INFERIOR (Z local = 0):
-      //   x_3mf = x_shape - offX
-      //   y_3mf = -(z_world) = -(-(y_shape) + offZ_world) = y_shape - ... 
-      // 
-      // La forma más robusta: tomar los vértices YA transformados de collectGeometry.
-      // Pero eso requiere el mesh. Tomamos el approach simple:
-      //   x_3mf = sx (en coord de shape, el offset se aplica después via matrixWorld)
+      // Se guardan las coordenadas locales del shape (sin transformar).
+      // El offset de posición y la conversión Y-up → Z-up se aplican
+      // después, en applyWorldTransformTo3MF, usando matrixWorld del
+      // mesh (más preciso que recalcular offX/offZ a mano aquí).
 
       // Cara inferior: z_3mf = baseZ3mf
       verts[(i)        * 3 + 0] = sx;
       verts[(i)        * 3 + 1] = sy;
-      verts[(i)        * 3 + 2] = 0; // se corregirá con offset al final
+      verts[(i)        * 3 + 2] = 0; // z local; se transforma luego
 
       // Cara superior: z_3mf = topZ3mf (= depth en coord locales)
       verts[(i + nVerts2D) * 3 + 0] = sx;
       verts[(i + nVerts2D) * 3 + 1] = sy;
-      verts[(i + nVerts2D) * 3 + 2] = depth3mf; // se corregirá con offset al final
+      verts[(i + nVerts2D) * 3 + 2] = depth3mf; // z local; se transforma luego
     }
 
     // ── 4. Generar triángulos ────────────────────────────────────────────
