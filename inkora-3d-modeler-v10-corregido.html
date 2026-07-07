@@ -3382,25 +3382,6 @@ const PanelUI = (() => {
       if (!ct || !ct.extruded || !ct.piece) return;
       PanelUI.openColorPopoverFor(i, e.clientX, e.clientY);
     });
-    /*
-      // Restaurar highlight de selección sobre el nuevo color
-      const i = parseInt(item.dataset.idx, 10);
-      const targets = new Set([i]);
-      State.selectedIdxs.forEach(si => {
-        const sc = State.contours[si];
-        if (sc && sc.extruded && sc.piece) targets.add(si);
-      });
-      targets.forEach(si => {
-        const sc = State.contours[si];
-        if (!sc || !sc.piece) return;
-        const mesh = sc.piece.mesh;
-        delete mesh.userData._colorEditing;
-        if (mesh.userData._selected) Viewport._applyHighlightPublic(mesh, 'select');
-      });
-      History.push(State);
-      renderList();
-    });
-    */
 
     // ── Click: selección unificada (simple / Ctrl / Shift) ──
     // Usamos un timer para no interferir con el doble click sobre el nombre
@@ -4860,32 +4841,6 @@ const PanelUI = (() => {
         const face = viewFaceForContour(c);
         const box = contourScreenBox(c, idx, face);
         if (!box) return;
-
-        /*
-        // Calcular bbox 3D del mesh
-        const box3 = new THREE.Box3().setFromObject(mesh);
-        // Los 8 vértices de la bbox
-        const corners = [
-          new THREE.Vector3(box3.min.x, box3.min.y, box3.min.z),
-          new THREE.Vector3(box3.max.x, box3.min.y, box3.min.z),
-          new THREE.Vector3(box3.min.x, box3.max.y, box3.min.z),
-          new THREE.Vector3(box3.max.x, box3.max.y, box3.min.z),
-          new THREE.Vector3(box3.min.x, box3.min.y, box3.max.z),
-          new THREE.Vector3(box3.max.x, box3.min.y, box3.max.z),
-          new THREE.Vector3(box3.min.x, box3.max.y, box3.max.z),
-          new THREE.Vector3(box3.max.x, box3.max.y, box3.max.z),
-        ];
-
-        // Proyectar todos los vértices a pantalla
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        corners.forEach(v => {
-          const s = projectToScreen(v);
-          if (s.x < minX) minX = s.x;
-          if (s.y < minY) minY = s.y;
-          if (s.x > maxX) maxX = s.x;
-          if (s.y > maxY) maxY = s.y;
-        });
-        */
 
         // El contorno se selecciona SOLO si su bbox en pantalla está 100% dentro
         if (box.minX >= selX1 - INSIDE_EPS && box.maxX <= selX2 + INSIDE_EPS &&
