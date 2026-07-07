@@ -4090,7 +4090,6 @@ const PanelUI = (() => {
     let shortcuts = loadFromStorage();
     let _editMode = false;
     let _recordingId = null; // id del atajo que está grabando
-    let _hiddenMeshes = new Set(); // para toggle visibility
 
     function loadFromStorage() {
       try {
@@ -4455,7 +4454,6 @@ const PanelUI = (() => {
           if (State.selectedPieceIdx === null) break;
           const p = State.pieces[State.selectedPieceIdx];
           p.mesh.visible = !p.mesh.visible;
-          _hiddenMeshes[p.mesh.visible ? 'delete' : 'add'](p.mesh);
           Utils.toast(p.mesh.visible ? `${p.name} visible.` : `${p.name} oculta.`);
           break;
         }
