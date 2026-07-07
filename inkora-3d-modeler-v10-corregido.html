@@ -2167,7 +2167,7 @@ const GeoModule = (() => {
 
 
 /* ══════════════════════════════════════════════════════
-   MÓDULO 4 — EXPORTACIÓN 3MF  (v9 — Geometría Sólida)
+   MÓDULO 4 — EXPORTACIÓN 3MF  (v10 — Geometría Sólida)
    Spec: 3D Manufacturing Format Core 1.3 +
          Materials and Properties Extension 1.2
 
@@ -2814,7 +2814,7 @@ const Exporter = (() => {
 
 
 /* ══════════════════════════════════════════════════════
-   MÓDULO 6 — HISTORIAL (UNDO / REDO)
+   MÓDULO 5 — HISTORIAL (UNDO / REDO)
    Estrategia: snapshot completo del estado lógico antes
    de cada operación destructiva. Dado que las geometrías
    Three.js no son serializables, guardamos los datos
@@ -2939,7 +2939,7 @@ const History = (() => {
 
 
 /* ══════════════════════════════════════════════════════
-   MÓDULO 7 — TRANSFORMACIONES POR PIEZA
+   MÓDULO 6 — TRANSFORMACIONES POR PIEZA
    Gizmo visual 3D (handles de traslación y escala) +
    inputs numéricos en el panel.
 
@@ -3050,7 +3050,7 @@ function safeSelectionFace(c) {
 
 
 /* ══════════════════════════════════════════════════════
-   MÓDULO 5 — UI DEL PANEL
+   MÓDULO 7 — UI DEL PANEL
    Selección unificada (2D + 3D), grupos, multi-select,
    Ctrl+click, Shift+click, renombrar, Ctrl+G/Ctrl+U.
    EXTENSIÓN: drag&drop para reordenar, búsqueda.
