@@ -2014,7 +2014,7 @@ const Viewport = (() => {
     init,add2D,clear2D,add3D,remove3D,clearAll,focusAll,
     setEmissive,clearEmissive,onClickMesh,onHoverMesh,getScene,getCamera,getRenderer,
     group2D:()=>group2D, group3D:()=>group3D,
-    _applyHighlightPublic: _applyHighlight,
+    applyHighlight: _applyHighlight,
   };
 })();
 
@@ -3646,7 +3646,7 @@ const PanelUI = (() => {
       c.piece.mesh.userData._highlightOrigColor = new THREE.Color(hex).getHex();
       c.piece.mesh.material.emissive?.set(0x000000);
       c.piece.mesh.material.emissiveIntensity = 0;
-      if (pushHistory && c.piece.mesh.userData._selected) Viewport._applyHighlightPublic(c.piece.mesh, 'select');
+      if (pushHistory && c.piece.mesh.userData._selected) Viewport.applyHighlight(c.piece.mesh, 'select');
     });
     renderList();
     if (pushHistory) {
