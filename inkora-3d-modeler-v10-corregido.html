@@ -1490,59 +1490,63 @@ const DXFParser = (() => {
   return {loadFile};
 })();
 
-/* ── Winding order helpers (scope global) ──────────────────────────────────────────
+/* ══════════════════════════════════════════════════════
+   WindingUtils — Winding order helpers
    Three.js ExtrudeGeometry: shape exterior CCW, holes CW.
    Se usan las curves ORIGINALES para evitar puntos colineales extra
    que degradan el triangulador en letras de lados rectos.
-───────────────────────────────────────────────────────────────────────────── */
-function _signedAreaPts(pts) {
-  let a = 0;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    a += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+   ══════════════════════════════════════════════════════ */
+const WindingUtils = (() => {
+  function _signedAreaPts(pts) {
+    let a = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      a += (pts[j].x + pts[i].x) * (pts[j].y - pts[i].y);
+    }
+    return a / 2;
   }
-  return a / 2;
-}
-function isShapeCCW(srcShape) {
-  return _signedAreaPts(srcShape.getPoints(32)) > 0;
-}
-function copyCurves(src, dst, reverse) {
-  const curves = src.curves;
-  if (!curves || curves.length === 0) {
-    const pts = src.getPoints(64);
-    if (reverse) pts.reverse();
-    dst.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) dst.lineTo(pts[i].x, pts[i].y);
+  function isShapeCCW(srcShape) {
+    return _signedAreaPts(srcShape.getPoints(32)) > 0;
+  }
+  function copyCurves(src, dst, reverse) {
+    const curves = src.curves;
+    if (!curves || curves.length === 0) {
+      const pts = src.getPoints(64);
+      if (reverse) pts.reverse();
+      dst.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) dst.lineTo(pts[i].x, pts[i].y);
+      dst.autoClose = true;
+      return;
+    }
+    if (!reverse) {
+      const startPt = curves[0].getPoint(0);
+      dst.moveTo(startPt.x, startPt.y);
+      curves.forEach(curve => dst.curves.push(curve));
+    } else {
+      const reversed = [...curves].reverse();
+      const startPt = reversed[0].getPoint(1);
+      dst.moveTo(startPt.x, startPt.y);
+      reversed.forEach(curve => {
+        const steps = curve.isLineCurve ? 1 : 16;
+        for (let k = 1; k <= steps; k++) {
+          const pt = curve.getPoint(1 - k / steps);
+          dst.lineTo(pt.x, pt.y);
+        }
+      });
+    }
     dst.autoClose = true;
-    return;
   }
-  if (!reverse) {
-    const startPt = curves[0].getPoint(0);
-    dst.moveTo(startPt.x, startPt.y);
-    curves.forEach(curve => dst.curves.push(curve));
-  } else {
-    const reversed = [...curves].reverse();
-    const startPt = reversed[0].getPoint(1);
-    dst.moveTo(startPt.x, startPt.y);
-    reversed.forEach(curve => {
-      const steps = curve.isLineCurve ? 1 : 16;
-      for (let k = 1; k <= steps; k++) {
-        const pt = curve.getPoint(1 - k / steps);
-        dst.lineTo(pt.x, pt.y);
-      }
-    });
+  function makeShapeCCW(srcShape) {
+    const s = new THREE.Shape();
+    copyCurves(srcShape, s, !isShapeCCW(srcShape));
+    return s;
   }
-  dst.autoClose = true;
-}
-function makeShapeCCW(srcShape) {
-  const s = new THREE.Shape();
-  copyCurves(srcShape, s, !isShapeCCW(srcShape));
-  return s;
-}
-function makeHoleCW(srcShape) {
-  const p = new THREE.Path();
-  copyCurves(srcShape, p, isShapeCCW(srcShape));
-  return p;
-}
+  function makeHoleCW(srcShape) {
+    const p = new THREE.Path();
+    copyCurves(srcShape, p, isShapeCCW(srcShape));
+    return p;
+  }
+  return { isShapeCCW, copyCurves, makeShapeCCW, makeHoleCW };
+})();
 
 
 /* ══════════════════════════════════════════════════════
@@ -2531,10 +2535,10 @@ const Exporter = (() => {
 
     function shapeWithLiveHoles(srcIdx) {
       const src = State.contours[srcIdx] || contour;
-      const sh = makeShapeCCW(src.shape);
+      const sh = WindingUtils.makeShapeCCW(src.shape);
       (piece._holeIdxs || []).forEach(hIdx => {
         const h = State.contours[hIdx];
-        if (h && h.parentIdx === srcIdx && !h._deleted) sh.holes.push(makeHoleCW(h.shape));
+        if (h && h.parentIdx === srcIdx && !h._deleted) sh.holes.push(WindingUtils.makeHoleCW(h.shape));
       });
       return sh;
     }
@@ -3857,11 +3861,11 @@ const PanelUI = (() => {
     const pieceByContourIdx = new Map();
     function shapeWithSnapshotHoles(srcIdx, pd) {
       const src = snap.contours[srcIdx];
-      const sh = makeShapeCCW(src.shape);
+      const sh = WindingUtils.makeShapeCCW(src.shape);
       (pd.holeIdxs || []).forEach(hIdx => {
         const hContour = snap.contours[hIdx];
         if (hContour && hContour.parentIdx === srcIdx) {
-          sh.holes.push(makeHoleCW(hContour.shape));
+          sh.holes.push(WindingUtils.makeHoleCW(hContour.shape));
         }
       });
       return sh;
@@ -4952,7 +4956,7 @@ const PanelUI = (() => {
         if (State.selectedIdxs.has(cidx)) return;
 
         // Hueco directo → agregar como hole del shape padre (debe ser CW)
-        const holePath = makeHoleCW(candidate.shape);
+        const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
         holeIdxs.push(cidx);
         absorbed.add(candidate);
@@ -4969,7 +4973,7 @@ const PanelUI = (() => {
           if (island.depth !== candidate.depth + 1) return;
           if (State.selectedIdxs.has(iidx)) return;
 
-          const islandShape = makeShapeCCW(island.shape);
+          const islandShape = WindingUtils.makeShapeCCW(island.shape);
           absorbed.add(island);
           island.extruded = true;
           island.sel2D = false;
@@ -4991,7 +4995,7 @@ const PanelUI = (() => {
       const cIdx = State.contours.indexOf(c);
       const color = c.color || extrudeColor;
 
-      const compositeShape = makeShapeCCW(c.shape);
+      const compositeShape = WindingUtils.makeShapeCCW(c.shape);
       const extraShapes = []; // islas internas (sólidos dentro de huecos)
       const holeIdxs = [];
       absorbChildren(cIdx, c.depth, compositeShape, extraShapes, holeIdxs);
@@ -5004,7 +5008,7 @@ const PanelUI = (() => {
         if (candidate.depth !== c.depth + 1) return;
         // Solo si también está seleccionado — se extruirá como pieza propia
         if (!selectedSet.has(candidate)) return;
-        const holePath = makeHoleCW(candidate.shape);
+        const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
       });
 
@@ -5082,7 +5086,7 @@ const PanelUI = (() => {
         if (candidate.depth !== parentDepth + 1) return;
         if (State.selectedIdxs.has(cidx)) return;
 
-        const holePath = makeHoleCW(candidate.shape);
+        const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
         holeIdxs.push(cidx);
         absorbed.add(candidate);
@@ -5093,7 +5097,7 @@ const PanelUI = (() => {
           if (island.depth !== candidate.depth + 1) return;
           if (State.selectedIdxs.has(iidx)) return;
 
-          const islandShape = makeShapeCCW(island.shape);
+          const islandShape = WindingUtils.makeShapeCCW(island.shape);
           absorbed.add(island);
           absorbChildrenForce(iidx, island.depth, islandShape, extraShapes, holeIdxs);
           extraShapes.push(islandShape);
@@ -5102,7 +5106,7 @@ const PanelUI = (() => {
     }
 
     function build3DExtrusionItem(c, idx) {
-      const compositeShape = makeShapeCCW(c.shape);
+      const compositeShape = WindingUtils.makeShapeCCW(c.shape);
       const extraShapes = [];
       const holeIdxs = [];
 
