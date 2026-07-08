@@ -25,6 +25,7 @@
   --danger:   #ff4f4f;
   --panel-w:  296px;
   --header-h: 48px;
+  --tabs-h:   34px;
   --r:        5px;
   --r2:       8px;
   --mono:     'IBM Plex Mono','Courier New',monospace;
@@ -32,7 +33,7 @@
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--mono);font-size:13px}
-#app{display:grid;grid-template-rows:var(--header-h) 1fr;grid-template-columns:1fr var(--panel-w);height:100vh}
+#app{display:grid;grid-template-rows:var(--header-h) var(--tabs-h) 1fr;grid-template-columns:1fr var(--panel-w);height:100vh}
 
 /* ── Header ── */
 #header{
@@ -397,6 +398,61 @@ kbd.mod{background:rgba(184,240,74,.07);color:rgba(184,240,74,.7);border-color:r
   color:var(--text);font-family:var(--mono);font-size:11px;
   padding:1px 5px;outline:none;min-width:0;
 }
+
+/* ── Project tabs / recent projects ── */
+#project-tabs-row{
+  grid-column:1/-1;
+  display:flex;align-items:center;gap:7px;
+  padding:4px 10px;
+  background:var(--bg);
+  border-bottom:1px solid var(--border2);
+  overflow:hidden;
+  z-index:9;
+}
+#project-tabs{display:flex;align-items:center;gap:5px;overflow-x:auto;overflow-y:hidden;flex:1;height:100%;}
+#project-tabs::-webkit-scrollbar{height:3px}
+#project-tabs::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.project-tab{
+  height:24px;max-width:220px;min-width:86px;
+  display:flex;align-items:center;gap:6px;
+  padding:0 6px 0 10px;
+  border:1px solid var(--border2);
+  border-radius:var(--r);
+  background:var(--surface);
+  color:var(--text-dim);
+  font-family:var(--mono);font-size:10px;
+  cursor:pointer;user-select:none;white-space:nowrap;
+  transition:border-color .12s,background .12s,color .12s;
+}
+.project-tab:hover{border-color:var(--border);background:var(--surface2);color:var(--text)}
+.project-tab.active{border-color:rgba(184,240,74,.45);background:rgba(184,240,74,.08);color:var(--accent)}
+.project-tab-title{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
+.project-tab-close{
+  width:15px;height:15px;display:flex;align-items:center;justify-content:center;
+  border-radius:3px;color:var(--text-faint);font-size:12px;line-height:1;flex-shrink:0;
+}
+.project-tab-close:hover{background:rgba(255,79,79,.12);color:var(--danger)}
+#btn-new-project{height:24px;padding:3px 9px;font-size:10px;flex-shrink:0;}
+#recent-wrap{position:relative;}
+#recent-panel{
+  position:absolute;top:calc(100% + 7px);left:0;width:360px;max-width:calc(100vw - 24px);
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
+  box-shadow:0 12px 40px rgba(0,0,0,.72),0 0 0 1px rgba(255,255,255,.03);
+  z-index:350;display:none;overflow:hidden;
+}
+#recent-panel.open{display:block}
+.recent-header{padding:9px 12px;border-bottom:1px solid var(--border2);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-faint);}
+.recent-list{max-height:320px;overflow-y:auto;padding:4px 0;}
+.recent-list::-webkit-scrollbar{width:4px}.recent-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.recent-empty{padding:18px 12px;color:var(--text-faint);font-size:11px;text-align:center;line-height:1.7;}
+.recent-item{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;border-left:2px solid transparent;transition:background .1s,border-color .1s;}
+.recent-item:hover{background:var(--surface2);border-left-color:rgba(184,240,74,.35)}
+.recent-main{min-width:0;flex:1;}
+.recent-name{font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.recent-meta{font-size:9px;color:var(--text-faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.recent-remove{width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);cursor:pointer;border-radius:3px;font-size:13px;line-height:1;}
+.recent-remove:hover{background:rgba(255,79,79,.12);color:var(--danger)}
+
 html.light{--bg:#f0f0f0;--surface:#ffffff;--surface2:#e8e8ec;--surface3:#dddde8;--border:#ccccda;--border2:#d5d5e0;--text:#1a1a2e;--text-dim:#3a3a5a;--text-faint:#8888a0;}
 </style>
 </head>
@@ -414,6 +470,13 @@ html.light{--bg:#f0f0f0;--surface:#ffffff;--surface2:#e8e8ec;--surface3:#dddde8;
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9.5h8V4.2H6.2L5.1 3H2v6.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
       Abrir proyecto
     </button>
+    <div id="recent-wrap">
+      <button class="btn" id="btn-recent-projects" title="Abrir proyectos recientes">▾ Recientes</button>
+      <div id="recent-panel">
+        <div class="recent-header">Proyectos recientes</div>
+        <div class="recent-list" id="recent-list"><div class="recent-empty">Sin proyectos recientes.</div></div>
+      </div>
+    </div>
     <button class="btn" id="btn-save-project" disabled title="Guardar proyecto completo (Ctrl+S)">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.2 2h6.2L10 3.6V10H2.2V2zM4 2v3h4V2M4 10V7h4v3" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
       Guardar proyecto
@@ -458,6 +521,11 @@ html.light{--bg:#f0f0f0;--surface:#ffffff;--surface2:#e8e8ec;--surface3:#dddde8;
     <input type="file" id="file-input" accept=".dxf" style="display:none">
     <input type="file" id="project-input" accept=".inkora3d,.json" style="display:none">
   </header>
+
+  <div id="project-tabs-row">
+    <button class="btn" id="btn-new-project" title="Crear una pestaña de proyecto nueva">+ Proyecto</button>
+    <div id="project-tabs"></div>
+  </div>
 
   <div id="vp-wrap">
     <canvas id="viewport"></canvas>
@@ -4089,6 +4157,16 @@ const PanelUI = (() => {
     State.selectedFaces = new Map();
     State.groups = snap.groups ? snap.groups.map(g => ({ ...g, memberIdxs: [...g.memberIdxs] })) : [];
     State._nextGroupId = snap._nextGroupId || 1;
+    // snap.panel / snap.extrudeMode sólo vienen presentes cuando el snapshot
+    // viene de un archivo de proyecto o de otra pestaña (History.snapshot(),
+    // usado por undo/redo, no los incluye) — no-op en el camino de undo/redo.
+    if (snap.panel) {
+      const dEl = document.getElementById('ex-depth'), bEl = document.getElementById('ex-bevel'), bsEl = document.getElementById('ex-bseg');
+      if (dEl && snap.panel.depth != null) dEl.value = snap.panel.depth;
+      if (bEl && snap.panel.bevel != null) bEl.value = snap.panel.bevel;
+      if (bsEl && snap.panel.bevelSeg != null) bsEl.value = snap.panel.bevelSeg;
+    }
+    if (snap.extrudeMode) setExtrudeMode(snap.extrudeMode, false);
     PanelUI.refreshContourVisuals();
     PanelUI.renderList();
     PanelUI.updateModeBadge();
@@ -4098,11 +4176,12 @@ const PanelUI = (() => {
 
   /* ══════════════════════════════════════════════════════
      GUARDAR / ABRIR PROYECTO LOCAL (.inkora3d)
-     Guarda el estado lógico completo reutilizando la misma
-     serialización que History.snapshot() (undo/redo), más los
-     valores del panel y el modo de extrusión. Al abrir, la
-     reconstrucción reusa restoreSnapshot() — el mismo camino ya
-     probado por cada undo/redo.
+     buildProjectSnapshot()/hydrateProjectSnapshot() son la única
+     conversión entre el estado en memoria y JSON — las usan tanto
+     saveProject()/loadProjectFile() como ProjectTabs (para cachear
+     el contenido de una pestaña al salir de ella / restaurarlo al
+     volver). loadSnapshotIntoState() + restoreSnapshot() son el
+     único camino de reconstrucción de escena, compartido con undo/redo.
      ══════════════════════════════════════════════════════ */
   function _stripClosingPoint(points) {
     const out = points.map(p => ({ x: +p.x, y: +p.y }));
@@ -4157,76 +4236,138 @@ const PanelUI = (() => {
     return `${clean}${ext}`;
   }
 
-  async function saveProject() {
+  function projectTitleFromName(name) {
+    const base = String(name || 'Sin título').replace(/\.(inkora3d|json|dxf)$/i, '').trim();
+    return base || 'Sin título';
+  }
+
+  /* ── Snapshot JSON-safe del estado actual ──────────────
+     Reusa History.snapshot() (la misma serialización de undo/redo)
+     y sólo le agrega lo que el historial no necesita: el modo de
+     extrusión, los valores del panel, y las shapes convertidas a
+     puntos planos (History.snapshot() las deja como referencia
+     THREE.Shape viva, válida en memoria pero no serializable).
+  ─────────────────────────────────────────────────────── */
+  function buildProjectSnapshot() {
     const snap = History.snapshot(State);
+    return {
+      ...snap,
+      extrudeMode: State.extrudeMode,
+      panel: {
+        depth: document.getElementById('ex-depth').value,
+        bevel: document.getElementById('ex-bevel').value,
+        bevelSeg: document.getElementById('ex-bseg').value,
+      },
+      contours: snap.contours.map(c => ({ ...c, shape: serializeShape(c.shape) })),
+    };
+  }
+
+  function hydrateProjectSnapshot(rawSnap) {
+    if (!rawSnap || !Array.isArray(rawSnap.contours)) throw new Error('Formato de proyecto inválido.');
+    return {
+      filename: rawSnap.filename || 'inkora-project',
+      groups: Array.isArray(rawSnap.groups) ? rawSnap.groups.map(g => ({ ...g, memberIdxs: [...(g.memberIdxs || [])] })) : [],
+      _nextGroupId: rawSnap._nextGroupId || 1,
+      extrudeMode: rawSnap.extrudeMode || 'separate',
+      panel: rawSnap.panel || null,
+      contours: rawSnap.contours.map(sc => ({ ...sc, shape: deserializeShape(sc.shape) })),
+    };
+  }
+
+  function loadSnapshotIntoState(snap) {
+    History.clear();
+    restoreSnapshot(snap);
+    History.push(State);
+    Viewport.focusAll();
+  }
+
+  async function verifyFileHandlePermission(handle, mode = 'read') {
+    if (!handle || !handle.queryPermission) return true;
+    const opts = { mode };
+    if ((await handle.queryPermission(opts)) === 'granted') return true;
+    if (!handle.requestPermission) return false;
+    return (await handle.requestPermission(opts)) === 'granted';
+  }
+
+  /* ── Escribe un blob a disco ────────────────────────────
+     Prioridad: 1) sobrescribir el handle existente (mismo archivo
+     de la pestaña activa) 2) diálogo nativo de guardado 3) descarga
+     normal del navegador. Retorna el FileSystemFileHandle si se
+     obtuvo uno nuevo/reusado, 'cancelled' si el usuario cerró el
+     diálogo sin elegir nada, o null si se usó la descarga simple.
+  ─────────────────────────────────────────────────────── */
+  async function saveBlobToDisk(blob, safeName, existingHandle = null) {
+    if (existingHandle) {
+      try {
+        const ok = await verifyFileHandlePermission(existingHandle, 'readwrite');
+        if (ok) {
+          const writable = await existingHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return existingHandle;
+        }
+      } catch (err) {
+        console.warn('No se pudo sobrescribir el archivo asociado, se pedirá nueva ubicación.', err);
+      }
+    }
+    if (window.showSaveFilePicker) {
+      let handle = null;
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName: safeName,
+          types: [{ description: 'Proyecto INKORA 3D', accept: { 'application/json': ['.inkora3d'] } }],
+        });
+      } catch (err) {
+        if (err && err.name === 'AbortError') return 'cancelled';
+        console.warn('No se pudo usar el selector de guardado, se usará descarga normal.', err);
+      }
+      if (handle) {
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return handle;
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = safeName; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return null;
+  }
+
+  async function saveProject() {
     const payload = {
       app: 'INKORA 3D Modeler',
       format: 'inkora3d-project',
       formatVersion: 1,
       savedAt: new Date().toISOString(),
-      snapshot: {
-        ...snap,
-        extrudeMode: State.extrudeMode,
-        panel: {
-          depth: document.getElementById('ex-depth').value,
-          bevel: document.getElementById('ex-bevel').value,
-          bevelSeg: document.getElementById('ex-bseg').value,
-        },
-        contours: snap.contours.map(c => ({ ...c, shape: serializeShape(c.shape) })),
-      },
+      snapshot: buildProjectSnapshot(),
     };
     const blob = new Blob([JSON.stringify(payload)], { type: 'application/json;charset=utf-8' });
-    const safeName = sanitizeLocalFileName(State.filename || 'inkora-project', '.inkora3d');
+    const activeTab = ProjectTabs.getActiveTab();
+    const safeName = sanitizeLocalFileName(State.filename || activeTab?.name || 'inkora-project', '.inkora3d');
 
-    // File System Access API: sobrescribe con diálogo nativo si el navegador lo soporta.
-    if (window.showSaveFilePicker) {
-      try {
-        const handle = await window.showSaveFilePicker({
-          suggestedName: safeName,
-          types: [{ description: 'Proyecto INKORA 3D', accept: { 'application/json': ['.inkora3d'] } }],
-        });
-        const writable = await handle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        Utils.toast('Proyecto guardado correctamente.', 'ok');
-        return;
-      } catch (err) {
-        if (err && err.name === 'AbortError') return; // el usuario canceló el diálogo
-        console.warn('No se pudo usar el selector de guardado, se usará descarga normal.', err);
-      }
+    const result = await saveBlobToDisk(blob, safeName, activeTab?.fileHandle || null);
+    if (result === 'cancelled') return; // el usuario cerró el diálogo: sin toast, sin tocar nada
+    if (result) {
+      State.filename = projectTitleFromName(result.name);
+      const recentId = await RecentProjects.upsertHandle(result, result.name);
+      ProjectTabs.attachFileHandle(result, recentId, State.filename);
     }
-    // Fallback: descarga normal del navegador.
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = safeName; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    ProjectTabs.syncActiveFromState();
     Utils.toast('Proyecto guardado correctamente.', 'ok');
   }
 
-  async function loadProjectFile(file) {
+  async function loadProjectFile(file, fileHandle = null) {
     Utils.toast('Abriendo proyecto…', '', 60000);
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      const rawSnap = data.snapshot || data;
-      if (!rawSnap || !Array.isArray(rawSnap.contours)) throw new Error('Formato de proyecto inválido.');
-      const snap = {
-        filename: rawSnap.filename || file.name.replace(/\.(inkora3d|json)$/i, '') || 'inkora-project',
-        groups: Array.isArray(rawSnap.groups) ? rawSnap.groups.map(g => ({ ...g, memberIdxs: [...(g.memberIdxs || [])] })) : [],
-        _nextGroupId: rawSnap._nextGroupId || 1,
-        contours: rawSnap.contours.map(sc => ({ ...sc, shape: deserializeShape(sc.shape) })),
-      };
-      History.clear();
-      restoreSnapshot(snap);
-      if (rawSnap.extrudeMode) setExtrudeMode(rawSnap.extrudeMode, false);
-      if (rawSnap.panel) {
-        const dEl = document.getElementById('ex-depth'), bEl = document.getElementById('ex-bevel'), bsEl = document.getElementById('ex-bseg');
-        if (dEl && rawSnap.panel.depth != null) dEl.value = rawSnap.panel.depth;
-        if (bEl && rawSnap.panel.bevel != null) bEl.value = rawSnap.panel.bevel;
-        if (bsEl && rawSnap.panel.bevelSeg != null) bsEl.value = rawSnap.panel.bevelSeg;
-      }
-      History.push(State);
-      Viewport.focusAll();
+      const snap = hydrateProjectSnapshot(data.snapshot || data);
+      snap.filename = projectTitleFromName(snap.filename || file.name);
+      let recentId = null;
+      if (fileHandle) recentId = await RecentProjects.upsertHandle(fileHandle, file.name);
+      ProjectTabs.openProjectSnapshot(snap, { fileHandle, recentId, name: snap.filename });
       Utils.toast('Proyecto abierto correctamente.', 'ok');
     } catch (err) {
       Utils.toast('Error al abrir el proyecto: ' + err.message, 'err');
@@ -4234,24 +4375,387 @@ const PanelUI = (() => {
     }
   }
 
+  async function openProjectWithPicker() {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          multiple: false,
+          types: [{ description: 'Proyecto INKORA 3D', accept: { 'application/json': ['.inkora3d', '.json'] } }],
+        });
+        if (!handle) return;
+        const file = await handle.getFile();
+        await loadProjectFile(file, handle);
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.warn('No se pudo usar el selector avanzado, usando input normal.', err);
+      }
+    }
+    document.getElementById('project-input').click();
+  }
+
+  /* ── RecentProjects ──────────────────────────────────
+     IndexedDB porque los FileSystemFileHandle no son
+     serializables a localStorage (sí a IndexedDB, vía structured
+     clone). Sólo aplica cuando el navegador soporta File System
+     Access API — con el <input type=file> normal no hay handle
+     que recordar, así que esos proyectos simplemente no aparecen
+     en recientes (degradación esperada, no un error).
+  ─────────────────────────────────────────────────────── */
+  const RecentProjects = (() => {
+    const DB_NAME = 'inkora_v10_recent_projects';
+    const STORE = 'projects';
+    const MAX_ITEMS = 200;
+    let dbPromise = null;
+
+    function db() {
+      if (dbPromise) return dbPromise;
+      dbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = () => {
+          const database = req.result;
+          if (!database.objectStoreNames.contains(STORE)) database.createObjectStore(STORE, { keyPath: 'id' });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error || new Error('No se pudo abrir IndexedDB.'));
+      });
+      return dbPromise;
+    }
+
+    async function listRaw() {
+      try {
+        const database = await db();
+        return await new Promise((resolve, reject) => {
+          const req = database.transaction(STORE, 'readonly').objectStore(STORE).getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => reject(req.error || new Error('No se pudieron leer recientes.'));
+        });
+      } catch (err) {
+        console.warn('No se pudieron leer recientes.', err);
+        return [];
+      }
+    }
+
+    async function putRaw(rec) {
+      try {
+        const database = await db();
+        await new Promise((resolve, reject) => {
+          const req = database.transaction(STORE, 'readwrite').objectStore(STORE).put(rec);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error || new Error('No se pudo guardar reciente.'));
+        });
+      } catch (err) { console.warn('No se pudo guardar reciente.', err); }
+    }
+
+    async function deleteRaw(id) {
+      try {
+        const database = await db();
+        await new Promise((resolve, reject) => {
+          const req = database.transaction(STORE, 'readwrite').objectStore(STORE).delete(id);
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error || new Error('No se pudo borrar reciente.'));
+        });
+      } catch (err) { console.warn('No se pudo borrar reciente.', err); }
+    }
+
+    async function prune() {
+      const all = (await listRaw()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      for (const rec of all.slice(MAX_ITEMS)) await deleteRaw(rec.id);
+    }
+
+    async function upsertHandle(handle, name) {
+      if (!handle) return null;
+      try {
+        const all = await listRaw();
+        let existing = null;
+        for (const rec of all) {
+          try {
+            if (rec.handle && handle.isSameEntry && await handle.isSameEntry(rec.handle)) { existing = rec; break; }
+          } catch (_) {}
+        }
+        const id = existing?.id || (crypto.randomUUID ? crypto.randomUUID() : `recent-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+        const rec = { id, name: name || handle.name || 'Proyecto INKORA 3D', updatedAt: Date.now(), handle };
+        await putRaw(rec);
+        await prune();
+        await render();
+        return id;
+      } catch (err) {
+        console.warn('No se pudo agregar a recientes. El navegador quizás no permite guardar accesos a archivos locales.', err);
+        return null;
+      }
+    }
+
+    async function openRecent(id) {
+      const all = await listRaw();
+      const rec = all.find(r => r.id === id);
+      if (!rec?.handle) throw new Error('El proyecto reciente ya no tiene acceso local guardado.');
+      const ok = await verifyFileHandlePermission(rec.handle, 'read');
+      if (!ok) throw new Error('Permiso denegado para abrir el proyecto reciente.');
+      const file = await rec.handle.getFile();
+      rec.updatedAt = Date.now();
+      await putRaw(rec);
+      await loadProjectFile(file, rec.handle);
+      await render();
+      closePanel();
+    }
+
+    function formatDate(ts) {
+      if (!ts) return '';
+      try { return new Date(ts).toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' }); }
+      catch (_) { return ''; }
+    }
+
+    async function render() {
+      const listEl = document.getElementById('recent-list');
+      if (!listEl) return;
+      const all = (await listRaw()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      listEl.innerHTML = '';
+      if (!all.length) {
+        listEl.innerHTML = '<div class="recent-empty">Sin proyectos recientes todavía.<br>Cuando abras o guardes un .inkora3d aparecerá acá.</div>';
+        return;
+      }
+      all.forEach(rec => {
+        const item = document.createElement('div');
+        item.className = 'recent-item';
+        item.dataset.id = rec.id;
+        const main = document.createElement('div');
+        main.className = 'recent-main';
+        const name = document.createElement('div');
+        name.className = 'recent-name';
+        name.textContent = rec.name || 'Proyecto INKORA 3D';
+        const meta = document.createElement('div');
+        meta.className = 'recent-meta';
+        meta.textContent = formatDate(rec.updatedAt) || 'reciente';
+        const rm = document.createElement('button');
+        rm.className = 'recent-remove';
+        rm.title = 'Quitar de recientes';
+        rm.textContent = '×';
+        main.append(name, meta);
+        item.append(main, rm);
+        item.addEventListener('click', async e => {
+          if (e.target === rm) return;
+          try { await openRecent(rec.id); }
+          catch (err) { Utils.toast('No se pudo abrir reciente: ' + err.message, 'err'); console.error(err); }
+        });
+        rm.addEventListener('click', async e => {
+          e.stopPropagation();
+          await deleteRaw(rec.id);
+          await render();
+        });
+        listEl.appendChild(item);
+      });
+    }
+
+    function openPanel() { document.getElementById('recent-panel')?.classList.add('open'); render(); }
+    function closePanel() { document.getElementById('recent-panel')?.classList.remove('open'); }
+    function togglePanel() {
+      const p = document.getElementById('recent-panel');
+      if (!p) return;
+      if (p.classList.contains('open')) closePanel(); else openPanel();
+    }
+
+    return { upsertHandle, render, togglePanel, closePanel, openRecent };
+  })();
+
+  /* ── ProjectTabs ──────────────────────────────────────
+     Cada pestaña guarda { name, snapshot, fileHandle, recentId }.
+     `snapshot` es null mientras la pestaña está activa y "en vivo"
+     en State — sólo se materializa (captureActive) al salir de ella,
+     para no serializar en cada micro-edición. Al volver a activarla
+     (loadTab), se hidrata y reconstruye vía el mismo loadSnapshotIntoState
+     que usa la apertura de archivos.
+     Ojo: clearWorkspace() SÍ llama History.clear() — a diferencia del
+     botón "Limpiar" (que preserva el historial para poder deshacer el
+     propio vaciado), una pestaña nueva o cerrada es un proyecto distinto,
+     sin relación con el historial de undo de la pestaña anterior.
+  ─────────────────────────────────────────────────────── */
+  const ProjectTabs = (() => {
+    const tabs = [];
+    let activeId = null;
+    let seq = 1;
+
+    function newId() { return `project-tab-${seq++}`; }
+    function activeTab() { return tabs.find(t => t.id === activeId) || null; }
+    function cleanTitle(name) { return projectTitleFromName(name || 'Sin título'); }
+    function currentIsBlank() { return !State.contours.length && !State.pieces.length; }
+
+    function captureActive() {
+      const tab = activeTab();
+      if (!tab) return;
+      tab.name = cleanTitle(State.filename || tab.name || 'Sin título');
+      tab.snapshot = State.contours.length ? buildProjectSnapshot() : null;
+    }
+
+    function render() {
+      const wrap = document.getElementById('project-tabs');
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      tabs.forEach(tab => {
+        const el = document.createElement('div');
+        el.className = 'project-tab' + (tab.id === activeId ? ' active' : '');
+        el.title = tab.fileHandle?.name || tab.name || 'Sin título';
+        const title = document.createElement('span');
+        title.className = 'project-tab-title';
+        title.textContent = tab.name || 'Sin título';
+        const close = document.createElement('span');
+        close.className = 'project-tab-close';
+        close.textContent = '×';
+        close.title = 'Cerrar pestaña';
+        el.append(title, close);
+        el.addEventListener('click', e => {
+          if (e.target === close) return;
+          switchTo(tab.id);
+        });
+        close.addEventListener('click', e => {
+          e.stopPropagation();
+          closeTab(tab.id);
+        });
+        wrap.appendChild(el);
+      });
+    }
+
+    function clearWorkspace(name = 'Sin título') {
+      TransformModule.deselect(); TransformModule.hidePanel();
+      History.clear();
+      PanelUI.clearAllSelection();
+      Viewport.clearAll();
+      State.reset();
+      GeoModule.resetCounter();
+      State.filename = cleanTitle(name);
+      PanelUI.refreshContourVisuals();
+      PanelUI.renderList();
+      PanelUI.updateModeBadge();
+      PanelUI.updateButtons();
+      PanelUI.updateColorPanel();
+      History.push(State);
+    }
+
+    function loadTab(tab) {
+      if (tab.snapshot) {
+        const snap = hydrateProjectSnapshot(tab.snapshot);
+        loadSnapshotIntoState(snap);
+      } else {
+        clearWorkspace(tab.name || 'Sin título');
+      }
+      State.filename = cleanTitle(tab.name || State.filename || 'Sin título');
+    }
+
+    function init() {
+      if (tabs.length) return;
+      const tab = { id: newId(), name: 'Sin título', snapshot: null, fileHandle: null, recentId: null };
+      tabs.push(tab);
+      activeId = tab.id;
+      clearWorkspace(tab.name);
+      render();
+    }
+
+    function createBlank(name = 'Sin título') {
+      captureActive();
+      const tab = { id: newId(), name: cleanTitle(name), snapshot: null, fileHandle: null, recentId: null };
+      tabs.push(tab);
+      activeId = tab.id;
+      clearWorkspace(tab.name);
+      render();
+      Utils.toast('Nueva pestaña de proyecto.', 'ok', 1200);
+    }
+
+    function switchTo(id) {
+      if (id === activeId) return;
+      const tab = tabs.find(t => t.id === id);
+      if (!tab) return;
+      captureActive();
+      activeId = id;
+      loadTab(tab);
+      render();
+    }
+
+    function closeTab(id) {
+      if (tabs.length <= 1) {
+        const tab = activeTab();
+        if (tab) {
+          tab.name = 'Sin título'; tab.snapshot = null; tab.fileHandle = null; tab.recentId = null;
+          clearWorkspace(tab.name);
+          render();
+        }
+        return;
+      }
+      const idx = tabs.findIndex(t => t.id === id);
+      if (idx === -1) return;
+      const wasActive = id === activeId;
+      tabs.splice(idx, 1);
+      if (wasActive) {
+        const next = tabs[Math.min(idx, tabs.length - 1)];
+        activeId = next.id;
+        loadTab(next);
+      }
+      render();
+    }
+
+    function openProjectSnapshot(snap, meta = {}) {
+      captureActive();
+      let tab = activeTab();
+      const useCurrent = tab && currentIsBlank() && !tab.snapshot;
+      if (!useCurrent) {
+        tab = { id: newId(), name: cleanTitle(meta.name || snap.filename), snapshot: null, fileHandle: null, recentId: null };
+        tabs.push(tab);
+      }
+      activeId = tab.id;
+      tab.name = cleanTitle(meta.name || snap.filename || 'Proyecto INKORA 3D');
+      tab.fileHandle = meta.fileHandle || null;
+      tab.recentId = meta.recentId || null;
+      loadSnapshotIntoState(snap);
+      tab.snapshot = buildProjectSnapshot();
+      tab.name = cleanTitle(State.filename || tab.name);
+      render();
+    }
+
+    function syncActiveFromState() {
+      const tab = activeTab();
+      if (!tab) return;
+      tab.name = cleanTitle(State.filename || tab.name || 'Sin título');
+      tab.snapshot = State.contours.length ? buildProjectSnapshot() : null;
+      render();
+    }
+
+    function attachFileHandle(handle, recentId, name = null) {
+      const tab = activeTab();
+      if (!tab) return;
+      tab.fileHandle = handle || tab.fileHandle || null;
+      tab.recentId = recentId || tab.recentId || null;
+      if (name) tab.name = cleanTitle(name);
+      render();
+    }
+
+    return { init, createBlank, switchTo, closeTab, openProjectSnapshot, syncActiveFromState, attachFileHandle, getActiveTab: activeTab, captureActive };
+  })();
+
   document.getElementById('btn-save-project').addEventListener('click', async () => {
     if (!State.contours.length) { Utils.toast('No hay proyecto para guardar.', 'err'); return; }
     try { await saveProject(); }
     catch (err) { Utils.toast('Error al guardar: ' + err.message, 'err'); console.error(err); }
   });
-  document.getElementById('btn-open-project').addEventListener('click', () => document.getElementById('project-input').click());
+  document.getElementById('btn-open-project').addEventListener('click', openProjectWithPicker);
+  document.getElementById('btn-new-project').addEventListener('click', () => ProjectTabs.createBlank());
+  document.getElementById('btn-recent-projects').addEventListener('click', e => { e.stopPropagation(); RecentProjects.togglePanel(); });
+  document.addEventListener('click', e => {
+    const rw = document.getElementById('recent-wrap');
+    if (rw && !rw.contains(e.target)) RecentProjects.closePanel();
+  });
   document.getElementById('project-input').addEventListener('change', async e => {
     const f = e.target.files[0];
     if (f) { await loadProjectFile(f); e.target.value = ''; }
   });
 
+  ProjectTabs.init();
+  RecentProjects.render();
+
   btnUndo.addEventListener('click', () => {
     const snap = History.undo();
-    if (snap) { restoreSnapshot(snap); Utils.toast('Deshecho.'); }
+    if (snap) { restoreSnapshot(snap); ProjectTabs.syncActiveFromState(); Utils.toast('Deshecho.'); }
   });
   btnRedo.addEventListener('click', () => {
     const snap = History.redo();
-    if (snap) { restoreSnapshot(snap); Utils.toast('Rehecho.'); }
+    if (snap) { restoreSnapshot(snap); ProjectTabs.syncActiveFromState(); Utils.toast('Rehecho.'); }
   });
 
   /* ══════════════════════════════════════════════════════
@@ -4689,12 +5193,12 @@ const PanelUI = (() => {
 
         case 'undo': {
           const snap = History.undo();
-          if (snap) { restoreSnapshot(snap); Utils.toast('Deshecho.'); }
+          if (snap) { restoreSnapshot(snap); ProjectTabs.syncActiveFromState(); Utils.toast('Deshecho.'); }
           break;
         }
         case 'redo': {
           const snap = History.redo();
-          if (snap) { restoreSnapshot(snap); Utils.toast('Rehecho.'); }
+          if (snap) { restoreSnapshot(snap); ProjectTabs.syncActiveFromState(); Utils.toast('Rehecho.'); }
           break;
         }
 
@@ -4744,7 +5248,7 @@ const PanelUI = (() => {
           break;
 
         case 'openProject':
-          document.getElementById('btn-open-project').click();
+          openProjectWithPicker();
           break;
 
         case 'saveProject':
@@ -5145,6 +5649,7 @@ const PanelUI = (() => {
       Viewport.focusAll();
       // Snapshot del estado base DESPUÉS de construir toda la escena
       History.push(State);
+      ProjectTabs.syncActiveFromState();
       Utils.toast(`${shapeData.length} contorno(s) cargados. Seleccioná y extruí.`,'ok');
     } catch(err){Utils.toast('Error: '+err.message,'err');console.error(err);}
   }
@@ -5512,6 +6017,7 @@ const PanelUI = (() => {
     document.getElementById('mode-badge').className='';
     // Snapshot del estado vacío DESPUÉS de limpiar
     History.push(State);
+    ProjectTabs.syncActiveFromState();
     Utils.toast('Escena limpiada.');
   });
 
