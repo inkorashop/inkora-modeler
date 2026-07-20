@@ -2934,6 +2934,8 @@ const History = (() => {
         absorbed: c.extruded && c.piece === null && !c._isFakeContour,
         // Flag de contorno ficticio (creado al extruir sobre pieza 3D)
         isFakeContour: !!c._isFakeContour,
+        // Contorno original que define esta cara re-extruida.
+        sourceContourIdx: Number.isInteger(c._sourceContourIdx) ? c._sourceContourIdx : null,
         panelHidden: !!c._panelHidden,
         deleted: !!c._deleted,
         linkedPieceIdx: c.piece && c.piece.contourIdx !== state.contours.indexOf(c) ? c.piece.contourIdx : null,
@@ -3960,9 +3962,10 @@ const PanelUI = (() => {
       mesh.add(area);
     }
     items.forEach(item => {
-      const pts = item.c.shape.getPoints(128);
-      addArea(item.c.shape, absDepth + 0.16, item.cIdx, 'top');
-      addArea(item.c.shape, -0.16, item.cIdx, 'bottom');
+      const pickShape = item.pickShape || item.compositeShape || item.c.shape;
+      const pts = pickShape.getPoints(128);
+      addArea(pickShape, absDepth + 0.16, item.cIdx, 'top');
+      addArea(pickShape, -0.16, item.cIdx, 'bottom');
       addLine(pts, absDepth + 0.12, item.cIdx, 'top');
       addLine(pts, -0.12, item.cIdx, 'bottom');
     });
@@ -4007,11 +4010,20 @@ const PanelUI = (() => {
     const pieceByContourIdx = new Map();
     function shapeWithSnapshotHoles(srcIdx, pd) {
       const src = snap.contours[srcIdx];
-      const sh = WindingUtils.makeShapeCCW(src.shape);
+      const sourceIdx = Number.isInteger(src?.sourceContourIdx)
+        ? src.sourceContourIdx
+        : srcIdx;
+      const source = snap.contours[sourceIdx] || src;
+      const sh = WindingUtils.makeShapeCCW(source.shape);
       (pd.holeIdxs || []).forEach(hIdx => {
         const hContour = snap.contours[hIdx];
-        if (hContour && hContour.parentIdx === srcIdx) {
-          sh.holes.push(WindingUtils.makeHoleCW(hContour.shape));
+        if (!hContour) return;
+        const hSourceIdx = Number.isInteger(hContour.sourceContourIdx)
+          ? hContour.sourceContourIdx
+          : hIdx;
+        const hSource = snap.contours[hSourceIdx] || hContour;
+        if (hSource.parentIdx === sourceIdx) {
+          sh.holes.push(WindingUtils.makeHoleCW(hSource.shape));
         }
       });
       return sh;
@@ -4027,6 +4039,7 @@ const PanelUI = (() => {
           sel2D: false, extruded: true, piece: null,
           depthOverride: sc.depthOverride ?? null,
           _isFakeContour: true,
+          _sourceContourIdx: Number.isInteger(sc.sourceContourIdx) ? sc.sourceContourIdx : null,
           _panelHidden: !!sc.panelHidden,
           _deleted: !!sc.deleted,
         };
@@ -4042,9 +4055,10 @@ const PanelUI = (() => {
             extraShapes: mergedExtraShapes,
           });
           if (sourceIdxs.length > 1) {
-            addMergedContourPickLines(mesh, sourceIdxs.map(srcIdx => ({
+            addMergedContourPickLines(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
               cIdx: srcIdx,
               c: { shape: snap.contours[srcIdx].shape },
+              pickShape: shapeIdx === 0 ? compositeShape : mergedExtraShapes[shapeIdx - 1],
             })), pd.depth);
           }
           // Restaurar posición base (encima de la pieza original)
@@ -4089,6 +4103,7 @@ const PanelUI = (() => {
         flatMesh, outlineMesh,
         sel2D: sc.sel2D, extruded: sc.extruded, piece: null,
         depthOverride: sc.depthOverride ?? null,
+        _sourceContourIdx: Number.isInteger(sc.sourceContourIdx) ? sc.sourceContourIdx : null,
         _panelHidden: !!sc.panelHidden,
         _deleted: !!sc.deleted,
       };
@@ -4105,9 +4120,10 @@ const PanelUI = (() => {
           extraShapes: mergedExtraShapes,
         });
         if (sourceIdxs.length > 1) {
-          addMergedContourPickLines(mesh, sourceIdxs.map(srcIdx => ({
+          addMergedContourPickLines(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
             cIdx: srcIdx,
             c: { shape: snap.contours[srcIdx].shape },
+            pickShape: shapeIdx === 0 ? compositeShape : mergedExtraShapes[shapeIdx - 1],
           })), pd.depth);
         }
         Viewport.add3D(mesh);
@@ -5079,6 +5095,9 @@ const PanelUI = (() => {
               sel2D: false, extruded: true, piece: newPiece,
               depthOverride: null,
               _isFakeContour: true,
+              _sourceContourIdx: Number.isInteger(sc._sourceContourIdx)
+                ? sc._sourceContourIdx
+                : srcIdx,
               _panelHidden: i !== 0,
             };
             State.contours.push(newContour);
@@ -5100,6 +5119,9 @@ const PanelUI = (() => {
               sel2D: false, extruded: true, piece: null,
               depthOverride: null,
               _isFakeContour: true,
+              _sourceContourIdx: Number.isInteger(h._sourceContourIdx)
+                ? h._sourceContourIdx
+                : hIdx,
               _panelHidden: true,
             });
           });
@@ -5791,6 +5813,7 @@ const PanelUI = (() => {
       });
       const piece = GeoModule.makePiece({
         mesh, name, color, contourIdx: cIdx,
+        sourceContourIdx: cIdx,
         depth: (c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
         holeIdxs: Array.from(new Set(holeIdxs)),
@@ -5815,6 +5838,7 @@ const PanelUI = (() => {
       const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
       const piece = GeoModule.makePiece({
         mesh, name, color: primary.color, contourIdx: primary.cIdx,
+        sourceContourIdx: primary.cIdx,
         depth: (primary.c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
         holeIdxs: Array.from(new Set(mergedItems.flatMap(item => item.holeIdxs))),
@@ -5828,48 +5852,99 @@ const PanelUI = (() => {
       });
     }
 
-    // absorbChildrenForce: igual que absorbChildren pero ignora el flag `extruded`
-    // en los hijos. Se usa al extruir sobre una pieza 3D ya existente, cuyos
-    // contornos hijo fueron marcados como extruded durante la primera extrusión.
-    function absorbChildrenForce(parentIdx, parentDepth, compositeShape, extraShapes, holeIdxs = []) {
-      State.contours.forEach((candidate, cidx) => {
-        if (absorbed.has(candidate)) return;
-        if (candidate.parentIdx !== parentIdx) return;
-        if (candidate.depth !== parentDepth + 1) return;
-        if (State.selectedIdxs.has(cidx)) return;
+    function resolveSourceContour(c, idx) {
+      // Una capa creada desde 3D usa un contorno ficticio, sin hijos propios.
+      // Seguimos su referencia hasta el contorno original, que conserva la
+      // jerarquía exterior/huecos importada desde el DXF.
+      if (!c?._isFakeContour) return { source: c, sourceIdx: idx };
+      const candidates = [c._sourceContourIdx, c.piece?._sourceContourIdx];
+      for (const rawIdx of candidates) {
+        if (rawIdx == null || rawIdx === '') continue;
+        let sourceIdx = Number(rawIdx);
+        const visited = new Set();
 
-        const holePath = WindingUtils.makeHoleCW(candidate.shape);
-        compositeShape.holes.push(holePath);
-        holeIdxs.push(cidx);
-        absorbed.add(candidate);
+        while (Number.isInteger(sourceIdx) && !visited.has(sourceIdx)) {
+          visited.add(sourceIdx);
+          const source = State.contours[sourceIdx];
+          if (!source) break;
+          if (!source._isFakeContour) return { source, sourceIdx };
 
-        State.contours.forEach((island, iidx) => {
-          if (absorbed.has(island)) return;
-          if (island.parentIdx !== cidx) return;
-          if (island.depth !== candidate.depth + 1) return;
-          if (State.selectedIdxs.has(iidx)) return;
+          const nextRawIdx = source._sourceContourIdx ?? source.piece?._sourceContourIdx;
+          if (nextRawIdx == null || nextRawIdx === '') {
+            return { source, sourceIdx };
+          }
+          sourceIdx = Number(nextRawIdx);
+        }
+      }
+      return { source: c, sourceIdx: idx };
+    }
+
+    function addFaceTopology(sourceIdx, compositeShape, extraShapes, holeIdxs, selectedSourceIdxs) {
+      const source = State.contours[sourceIdx];
+      if (!source?.shape) return;
+      const sourceDepth = Number(source.depth);
+
+      State.contours.forEach((hole, holeIdx) => {
+        if (!hole?.shape || hole._deleted || hole._isFakeContour) return;
+        if (hole.parentIdx !== sourceIdx) return;
+        if (Number.isFinite(sourceDepth) &&
+            Number.isFinite(Number(hole.depth)) &&
+            Number(hole.depth) !== sourceDepth + 1) return;
+        if (holeIdxs.includes(holeIdx)) return;
+
+        // Que el interior esté seleccionado por pertenecer a una pieza unida
+        // no cambia su papel topológico: sigue perforando la cara exterior.
+        compositeShape.holes.push(WindingUtils.makeHoleCW(hole.shape));
+        holeIdxs.push(holeIdx);
+
+        // Conservamos las islas sólidas dentro del hueco. Si una isla ya está
+        // seleccionada como cara propia, se extruirá por su propio item y no se
+        // agrega dos veces al conjunto de shapes.
+        State.contours.forEach((island, islandIdx) => {
+          if (!island?.shape || island._deleted || island._isFakeContour) return;
+          if (island.parentIdx !== holeIdx) return;
+          if (Number.isFinite(Number(hole.depth)) &&
+              Number.isFinite(Number(island.depth)) &&
+              Number(island.depth) !== Number(hole.depth) + 1) return;
+          if (selectedSourceIdxs.has(islandIdx)) return;
 
           const islandShape = WindingUtils.makeShapeCCW(island.shape);
-          absorbed.add(island);
-          absorbChildrenForce(iidx, island.depth, islandShape, extraShapes, holeIdxs);
+          addFaceTopology(
+            islandIdx,
+            islandShape,
+            extraShapes,
+            holeIdxs,
+            selectedSourceIdxs
+          );
           extraShapes.push(islandShape);
         });
       });
     }
 
-    function build3DExtrusionItem(c, idx) {
-      const compositeShape = WindingUtils.makeShapeCCW(c.shape);
+    function build3DExtrusionItem(c, idx, selectedSourceIdxs) {
+      const { source, sourceIdx } = resolveSourceContour(c, idx);
+      const compositeShape = WindingUtils.makeShapeCCW(source.shape || c.shape);
       const extraShapes = [];
       const holeIdxs = [];
 
-      // Absorber huecos hijos (holes) del contorno usando la variante Force,
-      // ya que los contornos hijo ya fueron marcados extruded=true en la primera
-      // extrusión 2D. absorbChildrenForce ignora ese flag y reconstruye los holes
-      // a partir de la geometría original del shape, garantizando que letras/formas
-      // con huecos interiores se extruyan correctamente también en capas superiores.
-      absorbChildrenForce(idx, c.depth, compositeShape, extraShapes, holeIdxs);
+      addFaceTopology(sourceIdx, compositeShape, extraShapes, holeIdxs, selectedSourceIdxs);
+
+      // La metadata de la pieza funciona como respaldo para duplicados o estados
+      // restaurados donde el hueco registrado pueda no estar en el índice visible.
+      (c.piece?._holeIdxs || []).forEach(holeIdx => {
+        const hole = State.contours[holeIdx];
+        if (!hole?.shape || hole._deleted) return;
+        const holeSourceIdx = Number.isInteger(hole._sourceContourIdx)
+          ? hole._sourceContourIdx
+          : holeIdx;
+        const holeSource = State.contours[holeSourceIdx] || hole;
+        if (holeSource.parentIdx !== sourceIdx || holeIdxs.includes(holeSourceIdx)) return;
+        compositeShape.holes.push(WindingUtils.makeHoleCW(holeSource.shape));
+        holeIdxs.push(holeSourceIdx);
+      });
+
       return {
-        c, idx, compositeShape, extraShapes, holeIdxs,
+        c, idx, source, sourceIdx, compositeShape, extraShapes, holeIdxs,
         face: State.selectedFaces.get(idx) || viewFaceForContour(c),
       };
     }
@@ -5888,20 +5963,31 @@ const PanelUI = (() => {
     }
 
     function makeFakeContourFrom3D(item, piece, hidden) {
+      const source = item.source || item.c;
       return {
-        shape: item.c.shape, offX: item.c.offX, offY: item.c.offY,
-        depth: item.c.depth, parentIdx: -1,
-        layer: item.c.layer || '0', color: item.c.color || piece.color || extrudeColor,
+        shape: source.shape || item.c.shape,
+        offX: source.offX ?? item.c.offX,
+        offY: source.offY ?? item.c.offY,
+        depth: source.depth ?? item.c.depth,
+        parentIdx: -1,
+        layer: source.layer || item.c.layer || '0',
+        color: source.color || item.c.color || piece.color || extrudeColor,
         flatMesh: null, outlineMesh: null,
         sel2D: false, extruded: true, piece,
         depthOverride: null,
         _isFakeContour: true,
+        _sourceContourIdx: item.sourceIdx,
         _panelHidden: !!hidden,
       };
     }
 
     let created3DCount = 0;
-    const selected3DItems = selected3D.map(({ c, idx }) => build3DExtrusionItem(c, idx));
+    const selected3DSourceIdxs = new Set(
+      selected3D.map(({ c, idx }) => resolveSourceContour(c, idx).sourceIdx)
+    );
+    const selected3DItems = selected3D.map(({ c, idx }) =>
+      build3DExtrusionItem(c, idx, selected3DSourceIdxs)
+    );
 
     // Extruir sobre piezas 3D seleccionadas
     if (State.extrudeMode === 'merged' && selected3DItems.length > 1) {
@@ -5918,15 +6004,18 @@ const PanelUI = (() => {
         const face = primary.face;
         const depth = directedDepthForFace(face);
         const anchorY = anchorYForFace(srcPiece, face);
-        const color = primary.c.color || srcPiece.color || extrudeColor;
+        const color = primary.source.color || primary.c.color || srcPiece.color || extrudeColor;
         const extraShapes = [...primary.extraShapes];
         items.slice(1).forEach(item => {
           extraShapes.push(item.compositeShape, ...item.extraShapes);
         });
 
-        const mesh = GeoModule.extrude(primary.compositeShape, primary.c.offX, primary.c.offY, {
-          depth, bevel, bevelSeg: bseg, color, extraShapes
-        });
+        const mesh = GeoModule.extrude(
+          primary.compositeShape,
+          primary.source.offX ?? primary.c.offX,
+          primary.source.offY ?? primary.c.offY,
+          { depth, bevel, bevelSeg: bseg, color, extraShapes }
+        );
         mesh.position.y += anchorY;
 
         const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
@@ -5935,13 +6024,17 @@ const PanelUI = (() => {
         const piece = GeoModule.makePiece({
           mesh, name, color,
           contourIdx: firstContourIdx,
-          sourceContourIdx: primary.idx,
+          sourceContourIdx: primary.sourceIdx,
           depth, bevel, bevelSeg: bseg,
           baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
           holeIdxs: Array.from(new Set(items.flatMap(item => item.holeIdxs || []))),
           mergedSourceIdxs: newIdxs,
         });
-        addMergedContourPickLines(mesh, items.map((item, i) => ({ c: item.c, cIdx: newIdxs[i] })), depth);
+        addMergedContourPickLines(mesh, items.map((item, i) => ({
+          c: item.c,
+          cIdx: newIdxs[i],
+          pickShape: item.compositeShape,
+        })), depth);
         Viewport.add3D(mesh);
         State.pieces.push(piece);
         items.forEach((item, i) => {
@@ -5951,14 +6044,14 @@ const PanelUI = (() => {
       });
     } else {
       selected3DItems.forEach(item => {
-        const { c, idx, compositeShape, extraShapes, face } = item;
+        const { c, source, sourceIdx, compositeShape, extraShapes, face } = item;
         const srcPiece = c.piece;
         const depth = directedDepthForFace(face);
         const anchorY = anchorYForFace(srcPiece, face);
 
       // Pasar baseY=0 explícitamente para que GeoModule no aplique offset de depth negativo
-      const mesh = GeoModule.extrude(compositeShape, c.offX, c.offY, {
-        depth, bevel, bevelSeg: bseg, color: c.color || srcPiece.color || extrudeColor, extraShapes
+      const mesh = GeoModule.extrude(compositeShape, source.offX ?? c.offX, source.offY ?? c.offY, {
+        depth, bevel, bevelSeg: bseg, color: source.color || c.color || srcPiece.color || extrudeColor, extraShapes
       });
 
       // La geometría extruida empieza en Z=0 local (= Y=0 world tras rotation.x=-90°).
@@ -5972,9 +6065,9 @@ const PanelUI = (() => {
       const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
       const newContourIdx = State.contours.length;
       const piece = GeoModule.makePiece({
-        mesh, name, color: c.color || srcPiece.color || extrudeColor,
+        mesh, name, color: source.color || c.color || srcPiece.color || extrudeColor,
         contourIdx: newContourIdx,
-        sourceContourIdx: idx,
+        sourceContourIdx: sourceIdx,
         depth, bevel, bevelSeg: bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
         holeIdxs: Array.from(new Set(item.holeIdxs || [])),
