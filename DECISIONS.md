@@ -602,7 +602,7 @@ medido aparte, la mezcla existente (0.22) ya se ve bien porque no hay
 relighting ni tonemap agresivo de por medio. Sin errores de consola.
 Sintaxis del archivo completo validada con `node --check`.
 
-## 2026-07-25 -- Investigacion: solapes visuales de SVG/Corel aparecen como paredes al extruir (NO IMPLEMENTADO)
+## 2026-07-25 -- SVG/Corel: resolver solapes visuales antes de extruir
 
 ### Sintoma observado
 
@@ -619,7 +619,7 @@ despues de apilar capas/formas.
 
 ### Estado anterior documentado para rollback
 
-Estado vigente antes de implementar cualquier solucion nueva:
+Estado vigente antes de esta implementacion:
 
 - `SVGParser.loadText()` usa `THREE.SVGLoader.parse()` y
   `THREE.SVGLoader.createShapes(path)`.
@@ -656,15 +656,15 @@ geometria escondida bajo otras capas y se ven paredes finas en los bordes de
 las formas superiores. El 3MF/exportador no es la causa: exporta lo que ya
 existe en `State.pieces`.
 
-### Solucion propuesta
+### Solucion aplicada
 
-Agregar una etapa de preprocesamiento de SVG antes de `computeHierarchy`:
-resolver la geometria visible por orden de pintado.
+Se agrego una etapa de preprocesamiento de SVG antes de `computeHierarchy`:
+resolver la geometria visible por orden de pintado usando booleanos 2D.
 
-Algoritmo propuesto para SVG:
+Algoritmo aplicado para SVG:
 
 1. Parsear y aplanar los fills en orden de documento/pintado, conservando
-   `pathIndex`, `shapeIndex`, `layer`, `color` y un `sourceElementId`.
+   `layer`, `color` y un `elementId` por operacion de pintado SVG.
 2. Convertir cada fill a poligono booleano robusto, incluyendo sus holes.
 3. Procesar de arriba hacia abajo manteniendo `coveredAbove`, la union de todo
    lo que ya fue pintado encima.
@@ -679,20 +679,30 @@ Algoritmo propuesto para SVG:
    continuar con el pipeline actual (`populateShapeData`, seleccion,
    extrusion, historial y exportacion).
 
-La solucion debe vivir en importacion, no en extrusion. El boton Extruir debe
+La solucion vive en importacion, no en extrusion. El boton Extruir debe
 seguir trabajando con contornos ya limpios/visibles; asi el mismo arreglo sirve
 para exportar 3MF, abrir en laminador, guardar proyecto y reextruir.
 
+Implementacion:
+
+- Nuevo script CDN: `clipper-lib@6.4.2/clipper.js`.
+- Nuevo modulo aislado: `SVGVisibleGeometry`.
+- `SVGVisibleGeometry.resolve(items)` procesa de arriba hacia abajo,
+  mantiene `coveredAbove`, calcula `visible = painted - coveredAbove` y
+  devuelve contornos planos en el orden original de pintado.
+- Si Clipper no carga, hay fallback al comportamiento anterior: importar los
+  contornos SVG sin resolver solapes visuales, con warning en consola. La app
+  no queda rota por una falla de CDN.
+
 ### Alcance recomendado
 
-Primera implementacion solo para SVG/Corel, porque SVG conserva mejor el orden
+Primera implementacion aplicada solo para SVG/Corel, porque SVG conserva mejor el orden
 visual de pintado. DXF no siempre preserva un orden de dibujo confiable, asi
 que para DXF conviene mantener el comportamiento actual hasta confirmar que el
 export de Corel incluye una senal estable de orden/capa.
 
-La implementacion deberia quedar aislada detras de una funcion/modulo nuevo,
-por ejemplo `SVGVisibleGeometry.resolve(flat)`, para que sea facil desactivarla
-o revertirla sin tocar la extrusion.
+La implementacion quedo aislada detras de `SVGVisibleGeometry.resolve(items)`,
+para que sea facil desactivarla o revertirla sin tocar la extrusion.
 
 ### Que NO conviene hacer
 
@@ -703,7 +713,7 @@ o revertirla sin tocar la extrusion.
 - No hacer booleanos directamente en 3D: es mas caro, mas fragil y llegaria
   tarde. El problema es 2D y debe resolverse antes de crear `State.contours`.
 
-### Plan de verificacion cuando se implemente
+### Verificacion esperada / pendiente con archivos reales
 
 - SVG minimo: rectangulo negro abajo + rectangulo naranja encima. Al importar,
   el negro visible debe quedar recortado; extruir naranja no debe generar pared
@@ -716,6 +726,20 @@ o revertirla sin tocar la extrusion.
   aparecer como contornos separados.
 - Proyectos `.inkora3d` viejos deben cargar igual que antes, porque ya guardan
   contornos resueltos y no pasan de nuevo por el importador.
+
+### Verificacion realizada
+
+- Sintaxis de los scripts inline del HTML validada con `vm.Script`.
+- `git diff --check` sin errores.
+- `clipper-lib@6.4.2/clipper.js` verificado contra jsDelivr: respuesta HTTP
+  200.
+- Prueba de modulo real extraido del HTML: rectangulo inferior `0..10`
+  recortado por rectangulo superior `4..10` devuelve el inferior visible
+  `0..4` y el superior intacto.
+- Prueba de modulo real extraido del HTML con capa superior con hole: el
+  inferior devuelve exterior + hole + isla interna, y el superior devuelve
+  exterior + hole; es la estructura que `computeHierarchy` y `btn-extrude`
+  ya manejan como huecos/islas.
 
 ## 2026-07-25 — La barra superior no era responsive (se recortaba en ventanas angostas)
 

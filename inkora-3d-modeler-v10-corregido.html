@@ -16,6 +16,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/SVGLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap');
@@ -1890,6 +1891,140 @@ const WindingUtils = (() => {
   return { isShapeCCW, copyCurves, makeShapeCCW, makeHoleCW };
 })();
 
+const SVGVisibleGeometry = (() => {
+  const SCALE = 10000;
+  const CLEAN_DIST = 2;
+  const MIN_AREA = 0.00001;
+  let warnedMissingClipper = false;
+
+  function stripClosingPoint(points) {
+    const pts = (points || [])
+      .filter(p => Number.isFinite(+p.x) && Number.isFinite(+p.y))
+      .map(p => ({ x: +p.x, y: +p.y }));
+    if (pts.length > 1) {
+      const a = pts[0], b = pts[pts.length - 1];
+      if (Math.abs(a.x - b.x) < 1e-8 && Math.abs(a.y - b.y) < 1e-8) pts.pop();
+    }
+    return pts;
+  }
+
+  function shapeFromPoints(points) {
+    const pts = stripClosingPoint(points);
+    const shape = new THREE.Shape();
+    if (pts.length < 3) return shape;
+    shape.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i].x, pts[i].y);
+    shape.closePath();
+    shape.autoClose = true;
+    return shape;
+  }
+
+  function toClipperPath(points) {
+    const pts = stripClosingPoint(points);
+    if (pts.length < 3) return null;
+    const path = pts.map(p => ({
+      X: Math.round(p.x * SCALE),
+      Y: Math.round(p.y * SCALE),
+    }));
+    return path.length >= 3 ? path : null;
+  }
+
+  function fromClipperPath(path) {
+    return (path || []).map(p => ({ x: p.X / SCALE, y: p.Y / SCALE }));
+  }
+
+  function pathArea(path, lib) {
+    if (!lib?.Clipper?.Area || !path?.length) return 0;
+    return Math.abs(lib.Clipper.Area(path)) / (SCALE * SCALE);
+  }
+
+  function cleanPaths(paths, lib) {
+    const raw = (paths || []).filter(p => Array.isArray(p) && p.length >= 3);
+    const cleaned = lib.Clipper.CleanPolygons
+      ? lib.Clipper.CleanPolygons(raw, CLEAN_DIST)
+      : raw.map(p => lib.Clipper.CleanPolygon ? lib.Clipper.CleanPolygon(p, CLEAN_DIST) : p);
+    return (cleaned || []).filter(p => p && p.length >= 3 && pathArea(p, lib) >= MIN_AREA);
+  }
+
+  function clipPaths(lib, type, subjectPaths, clipPathsArg = []) {
+    const subject = cleanPaths(subjectPaths, lib);
+    const clip = cleanPaths(clipPathsArg, lib);
+    if (!subject.length) return type === lib.ClipType.ctUnion ? clip : [];
+    if (type === lib.ClipType.ctDifference && !clip.length) return subject;
+
+    const clipper = new lib.Clipper();
+    clipper.StrictlySimple = true;
+    clipper.AddPaths(subject, lib.PolyType.ptSubject, true);
+    if (clip.length) clipper.AddPaths(clip, lib.PolyType.ptClip, true);
+
+    const solution = new lib.Paths();
+    const ok = clipper.Execute(
+      type,
+      solution,
+      lib.PolyFillType.pftEvenOdd,
+      lib.PolyFillType.pftEvenOdd
+    );
+    return ok ? cleanPaths(solution, lib) : [];
+  }
+
+  function fallback(items) {
+    const out = [];
+    items.forEach(item => {
+      item.rings.forEach(points => {
+        const shape = shapeFromPoints(points);
+        if (shape.curves.length >= 3) {
+          out.push({
+            shape,
+            layer: item.layer,
+            color: item.color,
+            elementId: item.elementId,
+          });
+        }
+      });
+    });
+    return out;
+  }
+
+  function resolve(items) {
+    const lib = globalThis.ClipperLib;
+    if (!lib?.Clipper || !lib?.ClipType || !lib?.PolyFillType) {
+      if (!warnedMissingClipper) {
+        console.warn('ClipperLib no esta disponible; SVG se importa sin resolver solapes visuales.');
+        warnedMissingClipper = true;
+      }
+      return fallback(items);
+    }
+
+    const visibleByPaintIndex = new Array(items.length).fill(null).map(() => []);
+    let coveredAbove = [];
+
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      const painted = cleanPaths(item.rings.map(toClipperPath).filter(Boolean), lib);
+      if (!painted.length) continue;
+
+      const visible = coveredAbove.length
+        ? clipPaths(lib, lib.ClipType.ctDifference, painted, coveredAbove)
+        : painted;
+
+      visibleByPaintIndex[i] = visible.map(path => ({
+        shape: shapeFromPoints(fromClipperPath(path)),
+        layer: item.layer,
+        color: item.color,
+        elementId: item.elementId,
+      })).filter(entry => entry.shape.curves.length >= 3);
+
+      coveredAbove = coveredAbove.length
+        ? clipPaths(lib, lib.ClipType.ctUnion, coveredAbove, painted)
+        : clipPaths(lib, lib.ClipType.ctUnion, painted, []);
+    }
+
+    return visibleByPaintIndex.flat();
+  }
+
+  return { resolve, shapeFromPoints };
+})();
+
 
 /* ══════════════════════════════════════════════════════
    SVGParser — Importación de archivos SVG (alternativa a DXF).
@@ -1904,6 +2039,8 @@ const WindingUtils = (() => {
    puramente geométrica.
    ══════════════════════════════════════════════════════ */
 const SVGParser = (() => {
+  // El SVG pasa por SVGVisibleGeometry antes del hierarchy para trabajar con
+  // lo visible despues de apilar formas, no con geometria oculta debajo.
   const SEGS = 96; // resolución al aplanar curvas a polígono
 
   // Ancho/alto declarado del SVG puede venir en mm/cm/in/pt/px — hace falta
@@ -1926,14 +2063,11 @@ const SVGParser = (() => {
     return (widthMM && vbWidth) ? widthMM / vbWidth : 1;
   }
 
-  function flattenToShape(curvePath, scale) {
+  function flattenToPoints(curvePath, scale) {
     const pts = curvePath.getPoints(SEGS);
-    const sh = new THREE.Shape();
     // SVG define Y hacia abajo; el resto de la app (igual que DXF) usa Y
     // hacia arriba, así que se invierte al aplanar.
-    sh.moveTo(pts[0].x * scale, -pts[0].y * scale);
-    for (let i = 1; i < pts.length; i++) sh.lineTo(pts[i].x * scale, -pts[i].y * scale);
-    return sh;
+    return pts.map(p => ({ x: p.x * scale, y: -p.y * scale }));
   }
 
   async function loadFile(file) {
@@ -1955,21 +2089,24 @@ const SVGParser = (() => {
     const data = loader.parse(text);
     const scale = computeScale(data.xml);
 
-    // Aplanar: cada shape exterior y cada hueco quedan como entradas
-    // independientes de la misma lista (mismo criterio que DXF).
-    const flat = [];
+    const paintItems = [];
     data.paths.forEach((path, pi) => {
       const colorHex = '#' + path.color.getHexString();
       const layer = path.userData?.node?.getAttribute?.('id') || `svg-${pi}`;
       const shapes = THREE.SVGLoader.createShapes(path);
-      shapes.forEach((shape, si) => {
-        const elementId = `svg:${pi}:${si}`;
-        flat.push({ shape: flattenToShape(shape, scale), layer, color: colorHex, elementId });
+      const item = { rings: [], layer, color: colorHex, elementId: `svg:${pi}` };
+      shapes.forEach(shape => {
+        const outer = flattenToPoints(shape, scale);
+        if (outer.length >= 3) item.rings.push(outer);
         shape.holes.forEach(hole => {
-          flat.push({ shape: flattenToShape(hole, scale), layer, color: colorHex, elementId });
+          const holePts = flattenToPoints(hole, scale);
+          if (holePts.length >= 3) item.rings.push(holePts);
         });
       });
+      if (item.rings.length) paintItems.push(item);
     });
+
+    const flat = SVGVisibleGeometry.resolve(paintItems);
 
     if (!flat.length) return [];
 
