@@ -4,22 +4,29 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-// En mi PC de desarrollo (app.isPackaged === false), apunta al HTML real del
-// proyecto para que cada doble-click abra la última versión guardada sin
-// recompilar el .exe. En cualquier otra PC corriendo desde el código fuente
-// (sin instalar), cae a la ruta relativa. Una vez instalado vía NSIS, el HTML
-// viaja empaquetado dentro de resources/ (ver "extraResources" en
-// package.json) y se carga desde ahí — process.resourcesPath solo existe una
-// vez empaquetado, por eso antes esto rompía en cualquier PC que no fuera la mía.
-const DEV_HTML = 'C:/Users/compu/Desktop/INKORA IA/INKORA 3D Modeler/inkora-3d-modeler-v10-corregido.html';
-const SOURCE_HTML = path.join(__dirname, '..', 'inkora-3d-modeler-v10-corregido.html');
-const BUNDLED_HTML = path.join(process.resourcesPath, 'inkora-3d-modeler-v10-corregido.html');
+// En desarrollo, incluso si se abre electron/dist/win-unpacked desde el
+// acceso directo local, cargar el HTML vivo del repo evita ejecutar una copia
+// empaquetada vieja. En una instalacion real sin .git cerca, se usa el HTML
+// empaquetado en resources/.
+const HTML_FILENAME = 'inkora-3d-modeler-v10-corregido.html';
+const BUNDLED_HTML = path.join(process.resourcesPath, HTML_FILENAME);
+
+function findRepoHtmlNear(startDir) {
+  let dir = path.resolve(startDir);
+  for (let i = 0; i < 8; i++) {
+    const html = path.join(dir, HTML_FILENAME);
+    const gitDir = path.join(dir, '.git');
+    if (fs.existsSync(html) && fs.existsSync(gitDir)) return html;
+    const next = path.dirname(dir);
+    if (next === dir) break;
+    dir = next;
+  }
+  return null;
+}
 
 function resolveAppHtml() {
-  if (!app.isPackaged) {
-    if (fs.existsSync(DEV_HTML)) return DEV_HTML;
-    if (fs.existsSync(SOURCE_HTML)) return SOURCE_HTML;
-  }
+  const repoHtml = findRepoHtmlNear(__dirname) || findRepoHtmlNear(process.cwd());
+  if (repoHtml) return repoHtml;
   return BUNDLED_HTML;
 }
 
