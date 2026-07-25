@@ -601,3 +601,44 @@ extruidos, `MeshBasicMaterial` sin luces) no sufre este problema —
 medido aparte, la mezcla existente (0.22) ya se ve bien porque no hay
 relighting ni tonemap agresivo de por medio. Sin errores de consola.
 Sintaxis del archivo completo validada con `node --check`.
+
+## 2026-07-25 — La barra superior no era responsive (se recortaba en ventanas angostas)
+
+### Síntoma
+
+En navegadores/ventanas más angostas (laptops, ventanas divididas), los
+~13 botones del header (con texto completo: "Importar DXF/SVG", "Abrir
+proyecto", "Exportar 3MF", etc.) no entraban en el ancho disponible.
+`#header` era un `flex` simple sin `overflow` ni `flex-wrap` ni ningún
+`@media` — no había ni un solo media query en todo el archivo. El
+contenido que no entraba quedaba directamente invisible (recortado por
+`body{overflow:hidden}`), no scrolleable ni reorganizado.
+
+### Solución: dos capas, no una sola
+
+1. **Modo compacto** (`@media (max-width: 1400px)`): el texto de cada
+   botón del header se envolvió en `<span class="btn-label">` (antes
+   era texto suelto al lado del ícono SVG, no se podía ocultar por
+   separado). Bajo el breakpoint, `.btn-label{display:none}` dentro del
+   header — quedan solo los íconos, con el `title` existente como
+   tooltip (se agregaron `title` a `Extruir`/`Exportar 3MF`/`Limpiar`,
+   que no tenían). Con esto, en anchos de laptop típicos (1366px y
+   menores) todo entra sin recortarse.
+2. **Red de seguridad** (`overflow-x:auto` en `#header`, mismo patrón
+   que ya usaba `#project-tabs`): si aun en modo compacto la ventana es
+   demasiado angosta (ventanas divididas muy chicas, zoom alto), el
+   header scrollea horizontalmente en vez de recortar contenido de
+   forma invisible. Nunca queda un botón inalcanzable.
+
+Se necesitan las dos: sin la capa 1, cualquier ventana de laptop normal
+obligaría a scrollear constantemente para algo tan básico como
+"Extruir". Sin la capa 2, un caso extremo (ventana muy angosta) seguiría
+rompiendo silenciosamente.
+
+### Verificación
+
+Con Chrome DevTools MCP, emulando viewports de 1600px (texto completo,
+sin cambios visuales), 1100px y 700px (modo compacto, todo visible sin
+scroll) y 480px (`header.scrollWidth=557 > clientWidth=480` →
+confirmado que scrollea en vez de recortar). Sin errores de consola.
+Sintaxis del archivo completo validada con `node --check`.

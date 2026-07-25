@@ -76,6 +76,21 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   box-shadow:var(--shadow-sm);
   z-index:10;
   position:relative;
+  /* Red de seguridad: si algún navegador/ventana es más angosta de lo que
+     entra el modo compacto de abajo, scrollea en vez de recortar botones
+     de forma invisible. Mismo patrón que #project-tabs. */
+  overflow-x:auto;overflow-y:hidden;
+}
+#header::-webkit-scrollbar{height:3px}
+#header::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+/* Modo compacto: pantallas angostas (laptops, ventanas divididas) no
+   entran los ~13 botones con texto completo. Se ocultan las etiquetas de
+   texto y quedan solo íconos — cada botón ya tiene su `title` como
+   tooltip, así que no se pierde información, solo densidad visual. */
+@media (max-width: 1400px){
+  #header{gap:6px;padding:0 10px;}
+  #header .btn{padding:6px 8px;}
+  #header .btn-label{display:none;}
 }
 #header::after{
   content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
@@ -582,18 +597,18 @@ html.light{
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Importar DXF/SVG
+      <span class="btn-label">Importar DXF/SVG</span>
     </button>
     <button class="btn" id="btn-paste-svg" title="Pegar DXF/SVG copiado (Ctrl+C en CorelDRAW → Ctrl+V acá, o pegar texto SVG a mano)">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2.5h4v1.2H4V2.5zM3 3.5h6v7H3v-7z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
-      Pegar SVG
+      <span class="btn-label">Pegar SVG</span>
     </button>
     <button class="btn" id="btn-open-project" title="Abrir proyecto INKORA 3D (Ctrl+O)">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9.5h8V4.2H6.2L5.1 3H2v6.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-      Abrir proyecto
+      <span class="btn-label">Abrir proyecto</span>
     </button>
     <div id="recent-wrap">
-      <button class="btn" id="btn-recent-projects" title="Abrir proyectos recientes">▾ Recientes</button>
+      <button class="btn" id="btn-recent-projects" title="Abrir proyectos recientes">▾ <span class="btn-label">Recientes</span></button>
       <div id="recent-panel">
         <div class="recent-header">Proyectos recientes</div>
         <div class="recent-list" id="recent-list"><div class="recent-empty">Sin proyectos recientes.</div></div>
@@ -601,19 +616,19 @@ html.light{
     </div>
     <button class="btn" id="btn-save-project" disabled title="Guardar proyecto completo (Ctrl+S)">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.2 2h6.2L10 3.6V10H2.2V2zM4 2v3h4V2M4 10V7h4v3" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
-      Guardar proyecto
+      <span class="btn-label">Guardar proyecto</span>
     </button>
-    <button class="btn primary" id="btn-extrude" disabled>
+    <button class="btn primary" id="btn-extrude" disabled title="Extruir la selección">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 9V3M3.5 5.5L6 3l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Extruir
+      <span class="btn-label">Extruir</span>
     </button>
-    <button class="btn" id="btn-export" disabled>
+    <button class="btn" id="btn-export" disabled title="Exportar el modelo como 3MF">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Exportar 3MF
+      <span class="btn-label">Exportar 3MF</span>
     </button>
-    <button class="btn danger" id="btn-clear" disabled>
+    <button class="btn danger" id="btn-clear" disabled title="Limpiar todo el proyecto actual">
       <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 2l7 7M9 2L2 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-      Limpiar
+      <span class="btn-label">Limpiar</span>
     </button>
     <div class="sep"></div>
     <div class="history-group" title="Deshacer / Rehacer (Ctrl+Z / Ctrl+Shift+Z)">
@@ -624,12 +639,12 @@ html.light{
     <div style="flex:1"></div>
     <a class="btn" id="btn-download-desktop"
        href="https://github.com/inkorashop/inkora-modeler/releases/latest/download/INKORA-3D-Modeler-Setup.exe"
-       title="Descargar la versión de escritorio (Windows)">⬇ App de escritorio</a>
+       title="Descargar la versión de escritorio (Windows)">⬇ <span class="btn-label">App de escritorio</span></a>
     <button class="btn" id="btn-theme" title="Alternar tema claro/oscuro">☀</button>
     <div id="shortcuts-wrap">
-      <button class="btn" id="btn-shortcuts">
+      <button class="btn" id="btn-shortcuts" title="Ver atajos de teclado">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="3" width="10" height="6" rx="1.2" stroke="currentColor" stroke-width="1.1"/><path d="M3.5 6.5h1M5.5 6.5h1M7.5 6.5h1M4.5 5.5v1" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>
-        Atajos
+        <span class="btn-label">Atajos</span>
       </button>
       <div id="shortcuts-panel">
         <div class="sc-header">
