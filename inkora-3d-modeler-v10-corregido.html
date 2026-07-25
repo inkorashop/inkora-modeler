@@ -1962,10 +1962,11 @@ const SVGParser = (() => {
       const colorHex = '#' + path.color.getHexString();
       const layer = path.userData?.node?.getAttribute?.('id') || `svg-${pi}`;
       const shapes = THREE.SVGLoader.createShapes(path);
-      shapes.forEach(shape => {
-        flat.push({ shape: flattenToShape(shape, scale), layer, color: colorHex });
+      shapes.forEach((shape, si) => {
+        const elementId = `svg:${pi}:${si}`;
+        flat.push({ shape: flattenToShape(shape, scale), layer, color: colorHex, elementId });
         shape.holes.forEach(hole => {
-          flat.push({ shape: flattenToShape(hole, scale), layer, color: colorHex });
+          flat.push({ shape: flattenToShape(hole, scale), layer, color: colorHex, elementId });
         });
       });
     });
@@ -1991,6 +1992,7 @@ const SVGParser = (() => {
       parentIdx: hierarchy[i].parentIdx,
       layer: f.layer,
       color: f.color,
+      elementId: f.elementId || null,
     }));
   }
 
@@ -3568,6 +3570,7 @@ const History = (() => {
         parentIdx: c.parentIdx,
         layer:   c.layer || '0',
         color:   c.color ?? null, // null se preserva — se resuelve al mostrar, según tema
+        elementId: c.elementId ?? null,
         sel2D:   c.sel2D,
         extruded: c.extruded,
         depthOverride: c.depthOverride ?? null,  // profundidad individual por contorno
@@ -4685,6 +4688,7 @@ const PanelUI = (() => {
           shape: sc.shape, offX: sc.offX, offY: sc.offY,
           depth: sc.depth, parentIdx: sc.parentIdx,
           layer: sc.layer || '0', color: Utils.resolveLegacyColor(sc.color),
+          elementId: sc.elementId ?? null,
           flatMesh: null, outlineMesh: null,
           sel2D: false, extruded: true, piece: null,
           depthOverride: sc.depthOverride ?? null,
@@ -4757,6 +4761,7 @@ const PanelUI = (() => {
         shape: sc.shape, offX: sc.offX, offY: sc.offY,
         depth: sc.depth, parentIdx: sc.parentIdx,
         layer: sc.layer || '0', color: legacyColor,
+        elementId: sc.elementId ?? null,
         flatMesh, outlineMesh,
         sel2D: sc.sel2D, extruded: sc.extruded, piece: null,
         depthOverride: sc.depthOverride ?? null,
@@ -5752,6 +5757,7 @@ const PanelUI = (() => {
               shape: sc.shape, offX: sc.offX, offY: sc.offY,
               depth: sc.depth, parentIdx: -1,
               layer: sc.layer || '0', color: Utils.resolveLegacyColor(sc.color) || Utils.resolveLegacyColor(src.color),
+              elementId: sc.elementId ?? null,
               flatMesh: null, outlineMesh: null,
               sel2D: false, extruded: true, piece: newPiece,
               depthOverride: null,
@@ -5776,6 +5782,7 @@ const PanelUI = (() => {
               shape: h.shape, offX: h.offX, offY: h.offY,
               depth: h.depth, parentIdx: newParentIdx,
               layer: h.layer || '0', color: Utils.resolveLegacyColor(h.color),
+              elementId: h.elementId ?? null,
               flatMesh: null, outlineMesh: null,
               sel2D: false, extruded: true, piece: null,
               depthOverride: null,
@@ -6343,7 +6350,7 @@ const PanelUI = (() => {
     // a lo que volver, así que "deshacer" no hacía nada).
     History.push(State);
     State.filename=filename;
-    shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color},i)=>{
+    shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color,elementId},i)=>{
       // color se guarda TAL CUAL viene (puede ser null = "sin color
       // explícito"). No se hornea el default acá — así, si el usuario
       // cambia de tema después de importar, refreshContourVisuals()
@@ -6355,7 +6362,7 @@ const PanelUI = (() => {
       Viewport.add2D(flatMesh);Viewport.add2D(outlineMesh);
       // depth y parentIdx vienen del parser: permiten saber si este contorno
       // es un hueco de otro al momento de extruir
-      State.contours.push({shape,offX,offY,depth,parentIdx,layer,color,flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null});
+      State.contours.push({shape,offX,offY,depth,parentIdx,layer,color,elementId: elementId ?? null,flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null});
     });
     PanelUI.renderList();PanelUI.refreshContourVisuals();PanelUI.updateModeBadge();
     Viewport.focusAll();
@@ -6499,6 +6506,31 @@ const PanelUI = (() => {
     const absorbed = new Set(); // contornos absorbidos como holes (no generan pieza propia)
     const selectedSet = new Set(selected); // lookup O(1)
 
+    function cleanKey(value) {
+      return value == null ? '' : String(value).trim();
+    }
+
+    function colorKey(contour) {
+      const raw = cleanKey(contour?.color).toLowerCase();
+      return /^#[0-9a-f]{6}$/.test(raw) ? raw : '';
+    }
+
+    function sameElementForAutoTopology(parent, child) {
+      const parentElement = cleanKey(parent?.elementId);
+      const childElement = cleanKey(child?.elementId);
+      if (parentElement || childElement) return !!parentElement && parentElement === childElement;
+
+      const parentLayer = cleanKey(parent?.layer);
+      const childLayer = cleanKey(child?.layer);
+      if (parentLayer && childLayer && parentLayer !== childLayer) return false;
+
+      const parentColor = colorKey(parent);
+      const childColor = colorKey(child);
+      if (parentColor && childColor && parentColor !== childColor) return false;
+
+      return true;
+    }
+
     // absorbChildren: procesa la jerarquía completa de un shape padre.
     //
     // Three.js ExtrudeGeometry soporta holes en un THREE.Shape, pero no anidamiento
@@ -6514,6 +6546,7 @@ const PanelUI = (() => {
     //
     // extraShapes: array acumulador de THREE.Shape de islas internas.
     function absorbChildren(parentIdx, parentDepth, compositeShape, extraShapes, holeIdxs = []) {
+      const parent = State.contours[parentIdx];
       State.contours.forEach((candidate, cidx) => {
         if (candidate.extruded) return;
         if (absorbed.has(candidate)) return;
@@ -6526,6 +6559,9 @@ const PanelUI = (() => {
         const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
         holeIdxs.push(cidx);
+        const sameElement = sameElementForAutoTopology(parent, candidate);
+        if (!sameElement) return;
+
         absorbed.add(candidate);
         candidate.extruded = true;
         candidate.sel2D = false;
@@ -6539,6 +6575,7 @@ const PanelUI = (() => {
           if (island.parentIdx !== cidx) return;
           if (island.depth !== candidate.depth + 1) return;
           if (State.selectedIdxs.has(iidx)) return;
+          if (!sameElementForAutoTopology(candidate, island)) return;
 
           const islandShape = WindingUtils.makeShapeCCW(island.shape);
           absorbed.add(island);
@@ -6758,6 +6795,7 @@ const PanelUI = (() => {
         parentIdx: -1,
         layer: source.layer || item.c.layer || '0',
         color: source.color || item.c.color || piece.color || extrudeColor,
+        elementId: source.elementId ?? item.c.elementId ?? null,
         flatMesh: null, outlineMesh: null,
         sel2D: false, extruded: true, piece,
         depthOverride: null,
