@@ -12,3 +12,11 @@ contextBridge.exposeInMainWorld('inkoraUpdater', {
   download: () => ipcRenderer.send('updater-download'),
   install: () => ipcRenderer.send('updater-install'),
 });
+
+contextBridge.exposeInMainWorld('inkoraSlicer', {
+  open: ({ slicer, filename, data }) => ipcRenderer.invoke('slicer-open-3mf', {
+    slicer,
+    filename,
+    data,
+  }),
+});

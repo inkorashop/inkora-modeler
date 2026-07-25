@@ -511,6 +511,33 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 .recent-meta{font-size:9px;color:var(--text-faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .recent-remove{width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);cursor:pointer;border-radius:3px;font-size:13px;line-height:1;}
 .recent-remove:hover{background:rgba(255,79,79,.12);color:var(--danger)}
+#slicer-wrap{position:relative;display:none}
+#slicer-wrap.electron-ready{display:block}
+#slicer-panel{
+  position:absolute;top:calc(100% + 7px);left:0;width:224px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
+  box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.03);
+  z-index:360;display:none;overflow:hidden;
+}
+#slicer-panel.open{display:block}
+.slicer-header{padding:9px 12px;border-bottom:1px solid var(--border2);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-faint);}
+.slicer-option{
+  width:100%;display:flex;align-items:center;gap:9px;padding:9px 12px;
+  border:0;border-bottom:1px solid var(--border2);background:transparent;
+  color:var(--text-dim);font-family:var(--mono);font-size:11px;text-align:left;
+  cursor:pointer;transition:background .1s,color .1s;
+}
+.slicer-option:last-child{border-bottom:0}
+.slicer-option:hover{background:var(--surface2);color:var(--text)}
+.slicer-option:focus-visible{outline:none;background:rgba(var(--accent-rgb),.08);color:var(--accent)}
+.slicer-logo{
+  width:18px;height:18px;border-radius:4px;display:inline-flex;
+  align-items:center;justify-content:center;flex-shrink:0;
+  border:1px solid var(--border);background:var(--surface3);
+}
+.slicer-logo svg{width:13px;height:13px;display:block}
+.slicer-logo.bambu{color:#63d471;background:rgba(99,212,113,.10);border-color:rgba(99,212,113,.35)}
+.slicer-logo.orca{color:#55c7ff;background:rgba(85,199,255,.10);border-color:rgba(85,199,255,.35)}
 
 html.light{
   /* Claro con tinte celeste (no gris neutro) — mismo criterio que el
@@ -628,6 +655,27 @@ html.light{
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Exportar 3MF
     </button>
+    <div id="slicer-wrap">
+      <button class="btn" id="btn-slicer" disabled title="Abrir este 3MF en un laminador instalado">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 8.8V3.2l4-1.7 4 1.7v5.6l-4 1.7-4-1.7zM2 3.2l4 1.7 4-1.7M6 4.9v5.6" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+        Abrir en laminador
+      </button>
+      <div id="slicer-panel">
+        <div class="slicer-header">Elegir laminador</div>
+        <button class="slicer-option" data-slicer="bambu" type="button">
+          <span class="slicer-logo bambu" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.8 14.2 5v6L8 14.2 1.8 11V5L8 1.8zM4.2 6.1 8 8l3.8-1.9M8 8v4" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </span>
+          Bambu Studio
+        </button>
+        <button class="slicer-option" data-slicer="orca" type="button">
+          <span class="slicer-logo orca" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M2.2 10.8c2.2-5 6.1-7.2 11.6-7.7-.8 5.3-3.9 8.6-9.3 9.8l1.2-3.3-3.5 1.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </span>
+          Orca Slicer
+        </button>
+      </div>
+    </div>
     <button class="btn danger" id="btn-clear" disabled title="Limpiar todo el proyecto actual">
       <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 2l7 7M9 2L2 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
       Limpiar
@@ -3376,9 +3424,10 @@ const Exporter = (() => {
   }
 
   /* ── exportMeshes ─────────────────────────────────────────────────────
-     Punto de entrada principal.
+     Fuente unica del 3MF. Exportar y abrir en laminador consumen este mismo
+     blob para que ningun camino quede desactualizado.
   ─────────────────────────────────────────────────────────────────────── */
-  async function exportMeshes(pieces, filename = 'inkora-model') {
+  async function generate3MFBlob(pieces, filename = 'inkora-model') {
     if (!pieces.length) throw new Error('No hay piezas 3D para exportar');
 
     Utils.toast('Construyendo geometría sólida…', '', 60000);
@@ -3457,15 +3506,24 @@ const Exporter = (() => {
     zip.file('3D/3dmodel.model', modelXML);
 
     const blob = await zip.generateAsync({ type: 'blob' });
+    return { blob, failedCount, totalCount: pieces.length, filename };
+  }
+
+  function download3MFBlob(blob, filename = 'inkora-model') {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url; a.download = filename + '.3mf'; a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-
-    return { failedCount, totalCount: pieces.length };
   }
 
-  return { exportMeshes };
+  async function exportMeshes(pieces, filename = 'inkora-model') {
+    const result = await generate3MFBlob(pieces, filename);
+    download3MFBlob(result.blob, filename);
+
+    return { failedCount: result.failedCount, totalCount: result.totalCount };
+  }
+
+  return { exportMeshes, generate3MFBlob };
 })();
 
 
@@ -4237,6 +4295,8 @@ const PanelUI = (() => {
     const has3D = [...State.selectedIdxs].some(idx => { const c = State.contours[idx]; return c && c.extruded && c.piece; });
     document.getElementById('btn-extrude').disabled = !has2D && !has3D;
     document.getElementById('btn-export').disabled=!State.pieces.length;
+    const slicerBtn = document.getElementById('btn-slicer');
+    if (slicerBtn) slicerBtn.disabled=!State.pieces.length;
     document.getElementById('btn-clear').disabled=!State.contours.length;
     document.getElementById('btn-save-project').disabled=!State.contours.length;
   }
@@ -6860,7 +6920,60 @@ const PanelUI = (() => {
     } catch(err){Utils.toast('Error al exportar: '+err.message,'err');console.error(err);}
   });
 
-  // Habilitar/deshabilitar segmentos según bisel
+  // Abrir el 3MF actual en un laminador instalado (solo Electron).
+  (() => {
+    const wrap = document.getElementById('slicer-wrap');
+    const btn = document.getElementById('btn-slicer');
+    const panel = document.getElementById('slicer-panel');
+    if (!wrap || !btn || !panel || !window.inkoraSlicer) return;
+
+    const labels = { bambu: 'Bambu Studio', orca: 'Orca Slicer' };
+    wrap.classList.add('electron-ready');
+
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (btn.disabled) return;
+      panel.classList.toggle('open');
+    });
+
+    document.addEventListener('click', e => {
+      if (!wrap.contains(e.target)) panel.classList.remove('open');
+    });
+
+    async function openInSlicer(slicer) {
+      if (!State.pieces.length) return;
+      const label = labels[slicer] || 'laminador';
+      panel.classList.remove('open');
+      Utils.toast(`Generando 3MF para ${label}...`, '', 60000);
+      try {
+        const result = await Exporter.generate3MFBlob(State.pieces, State.filename || 'inkora-model');
+        const data = await result.blob.arrayBuffer();
+        const response = await window.inkoraSlicer.open({
+          slicer,
+          filename: State.filename || 'inkora-model',
+          data,
+        });
+        if (!response?.ok) throw new Error(response?.message || `No se pudo abrir ${label}.`);
+        if (result.failedCount > 0 && result.failedCount < result.totalCount) {
+          Utils.toast(`${label} abierto con advertencias: ${result.failedCount} de ${result.totalCount} pieza(s) no se pudieron incluir.`, 'err');
+        } else {
+          Utils.toast(`${label} abierto con el 3MF actual.`, 'ok');
+        }
+      } catch (err) {
+        Utils.toast('Error al abrir laminador: ' + err.message, 'err');
+        console.error(err);
+      }
+    }
+
+    panel.querySelectorAll('.slicer-option').forEach(option => {
+      option.addEventListener('click', e => {
+        e.stopPropagation();
+        openInSlicer(option.dataset.slicer);
+      });
+    });
+  })();
+
+  // Habilitar/deshabilitar segmentos segun bisel
   (() => {
     const pop = document.getElementById('color-popover');
     const square = document.getElementById('color-square');

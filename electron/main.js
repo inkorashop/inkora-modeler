@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
 // En mi PC de desarrollo (app.isPackaged === false), apunta al HTML real del
 // proyecto para que cada doble-click abra la última versión guardada sin
@@ -66,11 +67,142 @@ function watchForChanges(win) {
   }
 }
 
-// ── Auto-actualización (electron-updater + GitHub Releases) ─────────────────
-// El botón/tarjeta de "hay una versión nueva" vive en el HTML (ver
-// inkora-3d-modeler-v10-corregido.html, sección updater). Acá solo se detecta
-// la versión nueva y se avisa — la descarga real ocurre recién cuando el
-// usuario aprieta el botón (autoDownload=false), tal como se pidió.
+// Abrir el 3MF actual en laminadores instalados.
+const SLICERS = {
+  bambu: {
+    label: 'Bambu Studio',
+    winFolders: ['Bambu Studio', 'BambuStudio'],
+    winExecutables: ['bambu-studio.exe', 'BambuStudio.exe', 'Bambu Studio.exe'],
+    winCommands: ['bambu-studio.exe', 'BambuStudio.exe'],
+    macApps: ['Bambu Studio', 'BambuStudio'],
+    linuxCommands: ['bambu-studio', 'BambuStudio'],
+  },
+  orca: {
+    label: 'Orca Slicer',
+    winFolders: ['OrcaSlicer', 'Orca Slicer', 'Orca-Slicer'],
+    winExecutables: ['orca-slicer.exe', 'OrcaSlicer.exe', 'Orca Slicer.exe'],
+    winCommands: ['orca-slicer.exe', 'OrcaSlicer.exe'],
+    macApps: ['Orca Slicer', 'OrcaSlicer'],
+    linuxCommands: ['orca-slicer', 'OrcaSlicer'],
+  },
+};
+
+function unique(items) {
+  return [...new Set(items.filter(Boolean))];
+}
+
+function slicerCandidates(slicer) {
+  const cfg = SLICERS[slicer];
+  if (!cfg) return [];
+
+  if (process.platform === 'darwin') {
+    return cfg.macApps.map(appName => ({ command: 'open', args: ['-a', appName] }));
+  }
+
+  if (process.platform === 'win32') {
+    const baseDirs = unique([
+      process.env.ProgramFiles,
+      process.env['ProgramFiles(x86)'],
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Programs') : null,
+    ]);
+    const paths = [];
+    baseDirs.forEach(base => {
+      cfg.winFolders.forEach(folder => {
+        cfg.winExecutables.forEach(exe => {
+          paths.push(path.join(base, folder, exe));
+        });
+      });
+    });
+
+    const existingPaths = unique(paths).filter(candidate => {
+      try { return fs.existsSync(candidate); }
+      catch { return false; }
+    });
+
+    return [
+      ...existingPaths.map(command => ({ command, args: [] })),
+      ...cfg.winCommands.map(command => ({ command, args: [] })),
+    ];
+  }
+
+  return cfg.linuxCommands.map(command => ({ command, args: [] }));
+}
+
+function launchDetached(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    let settled = false;
+    child.once('error', err => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
+    child.once('spawn', () => {
+      if (settled) return;
+      settled = true;
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+async function openFileInSlicer(slicer, filePath) {
+  const cfg = SLICERS[slicer];
+  if (!cfg) throw new Error('Laminador no reconocido.');
+
+  const candidates = slicerCandidates(slicer);
+  let lastError = null;
+  for (const candidate of candidates) {
+    try {
+      await launchDetached(candidate.command, [...candidate.args, filePath]);
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  const err = new Error(`No encontre ${cfg.label} instalado. Instalalo en la ruta normal o agregalo al PATH para que INKORA pueda abrirlo directamente.`);
+  err.code = 'SLICER_NOT_FOUND';
+  err.cause = lastError;
+  throw err;
+}
+
+function sanitize3MFName(name) {
+  const raw = path.basename(String(name || 'inkora-model')).replace(/\.[^.]+$/, '');
+  const clean = raw
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+  return clean || 'inkora-model';
+}
+
+function bufferFromPayload(data) {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  throw new Error('No se recibieron datos 3MF validos.');
+}
+
+async function writeTemp3MF(payload) {
+  const buffer = bufferFromPayload(payload?.data);
+  if (!buffer.length) throw new Error('El 3MF generado esta vacio.');
+  if (buffer.length > 250 * 1024 * 1024) throw new Error('El 3MF generado es demasiado grande para abrirlo automaticamente.');
+
+  const tempDir = path.join(app.getPath('temp'), 'inkora-3d-modeler');
+  await fs.promises.mkdir(tempDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 17);
+  const filePath = path.join(tempDir, `${sanitize3MFName(payload?.filename)}-${stamp}.3mf`);
+  await fs.promises.writeFile(filePath, buffer);
+  return filePath;
+}
+
+// Auto-actualizacion (electron-updater + GitHub Releases).
+// La tarjeta vive en el HTML; aca solo se detecta y se avisa.
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = false;
 
@@ -91,6 +223,23 @@ ipcMain.on('updater-download', () => {
 });
 ipcMain.on('updater-install', () => {
   autoUpdater.quitAndInstall();
+});
+
+ipcMain.handle('slicer-open-3mf', async (_event, payload) => {
+  try {
+    if (!payload || !SLICERS[payload.slicer]) {
+      throw new Error('Laminador no reconocido.');
+    }
+    const filePath = await writeTemp3MF(payload);
+    await openFileInSlicer(payload.slicer, filePath);
+    return { ok: true, filePath };
+  } catch (err) {
+    console.error('No se pudo abrir el laminador:', err);
+    return {
+      ok: false,
+      message: err?.message || 'No se pudo abrir el laminador.',
+    };
+  }
 });
 
 app.whenReady().then(() => {
