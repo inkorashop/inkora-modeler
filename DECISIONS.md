@@ -616,19 +616,23 @@ contenido que no entraba quedaba directamente invisible (recortado por
 
 ### Solución: dos capas, no una sola
 
-1. **Modo compacto** (`@media (max-width: 1400px)`): el texto de cada
-   botón del header se envolvió en `<span class="btn-label">` (antes
-   era texto suelto al lado del ícono SVG, no se podía ocultar por
-   separado). Bajo el breakpoint, `.btn-label{display:none}` dentro del
-   header — quedan solo los íconos, con el `title` existente como
-   tooltip (se agregaron `title` a `Extruir`/`Exportar 3MF`/`Limpiar`,
-   que no tenían). Con esto, en anchos de laptop típicos (1366px y
-   menores) todo entra sin recortarse.
+Primer intento: ocultar el texto de cada botón bajo un breakpoint y
+dejar solo íconos (con `title` como tooltip). Descartado — el pedido
+explícito era que los botones se achiquen, no que pierdan el texto.
+Solución final:
+
+1. **Achicar, no ocultar** (`@media (max-width:1500px)` y
+   `(max-width:1250px)`): dos escalones que reducen `padding`,
+   `font-size` y `gap` de `.btn` dentro del header. El texto de cada
+   botón nunca desaparece, solo ocupa menos espacio — a 1366px (laptop
+   típica) ya se ve claramente más compacto; a 1100px sigue entrando
+   todo sin necesidad de scroll.
 2. **Red de seguridad** (`overflow-x:auto` en `#header`, mismo patrón
-   que ya usaba `#project-tabs`): si aun en modo compacto la ventana es
-   demasiado angosta (ventanas divididas muy chicas, zoom alto), el
-   header scrollea horizontalmente en vez de recortar contenido de
-   forma invisible. Nunca queda un botón inalcanzable.
+   que ya usaba `#project-tabs`): si aun con los botones achicados al
+   mínimo una ventana es demasiado angosta (~1024px o menos, ventanas
+   divididas muy chicas), el header scrollea horizontalmente en vez de
+   recortar contenido de forma invisible. Nunca queda un botón
+   inalcanzable, aunque haga falta un scroll corto para el último.
 
 Se necesitan las dos: sin la capa 1, cualquier ventana de laptop normal
 obligaría a scrollear constantemente para algo tan básico como
@@ -637,8 +641,9 @@ rompiendo silenciosamente.
 
 ### Verificación
 
-Con Chrome DevTools MCP, emulando viewports de 1600px (texto completo,
-sin cambios visuales), 1100px y 700px (modo compacto, todo visible sin
-scroll) y 480px (`header.scrollWidth=557 > clientWidth=480` →
-confirmado que scrollea en vez de recortar). Sin errores de consola.
-Sintaxis del archivo completo validada con `node --check`.
+Con Chrome DevTools MCP, emulando viewports de 1600px (tamaño
+completo), 1366px y 1100px (achicado, todo visible sin scroll:
+`header.scrollWidth === clientWidth` en ambos) y 1024px (`scrollWidth
+1093 > clientWidth 1024` → confirmado que scrollea un poco para el
+último botón en vez de recortar). Sin errores de consola. Sintaxis del
+archivo completo validada con `node --check`.
