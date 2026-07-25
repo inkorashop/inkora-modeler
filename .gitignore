@@ -2,3 +2,5 @@
 electron/node_modules/
 electron/dist/
 *.lnk
+
+.vercel
