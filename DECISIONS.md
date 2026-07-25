@@ -602,6 +602,121 @@ medido aparte, la mezcla existente (0.22) ya se ve bien porque no hay
 relighting ni tonemap agresivo de por medio. Sin errores de consola.
 Sintaxis del archivo completo validada con `node --check`.
 
+## 2026-07-25 -- Investigacion: solapes visuales de SVG/Corel aparecen como paredes al extruir (NO IMPLEMENTADO)
+
+### Sintoma observado
+
+En un diseno tipo tucan, al seleccionar visualmente solo una parte del pico
+y extruir, aparece una pieza mucho mas grande de lo esperado: se extruyen
+zonas de la base negra y quedan paredes finas en limites donde, en CorelDRAW,
+otra pieza coloreada esta perfectamente apilada encima.
+
+El problema tambien se reprodujo importando SVG, asi que no corresponde al
+ultimo fix de absorcion de huecos (`e5bd6f1`) ni es especifico de Electron.
+Es un problema anterior del modelo de importacion: la app interpreta la
+geometria vectorial completa de cada shape, no el resultado visual final
+despues de apilar capas/formas.
+
+### Estado anterior documentado para rollback
+
+Estado vigente antes de implementar cualquier solucion nueva:
+
+- `SVGParser.loadText()` usa `THREE.SVGLoader.parse()` y
+  `THREE.SVGLoader.createShapes(path)`.
+- Cada shape exterior y cada hole del SVG se aplana como contorno
+  independiente en `flat`.
+- Luego `DXFParser.computeHierarchy(flat.map(f => f.shape))` recalcula
+  solamente `parentIdx` y `depth` por contencion geometrica.
+- `computeHierarchy` no hace booleanos, no resta formas superiores de formas
+  inferiores, no divide regiones visibles desconectadas y no usa el orden de
+  pintado del SVG/Corel como composicion visual.
+- El handler de `btn-extrude` recibe esos contornos ya generados y solo decide
+  que hijos se agregan como holes y cuales se absorben como parte del mismo
+  elemento (`sameElementForAutoTopology`). Ese fix evita que un contorno de
+  otro elemento desaparezca, pero no puede eliminar geometria que ya fue
+  importada debajo de otra capa.
+
+Punto seguro de referencia: commit `e5bd6f1` (`Corregir absorcion de contornos
+al extruir`). Si una futura implementacion de resolucion de solapes sale mal,
+volver a este estado restaura el comportamiento actual conocido: seleccion y
+extrusion funcionan sobre contornos completos, con la limitacion de que las
+formas inferiores siguen existiendo debajo de las superiores.
+
+### Causa raiz
+
+Corel/SVG permiten construir ilustraciones por apilado: una base negra grande
+puede existir completa por debajo, y piezas naranjas, blancas o grises pueden
+tapar partes de esa base de forma pixel-perfect. Visualmente no hay material
+negro debajo de esas piezas, pero vectorialmente si lo hay: la forma negra no
+fue recortada, solo quedo cubierta.
+
+INKORA hoy importa cada fill como si todo su area fuera material real. Por eso,
+al extruir una forma inferior o una region relacionada con ella, aparece
+geometria escondida bajo otras capas y se ven paredes finas en los bordes de
+las formas superiores. El 3MF/exportador no es la causa: exporta lo que ya
+existe en `State.pieces`.
+
+### Solucion propuesta
+
+Agregar una etapa de preprocesamiento de SVG antes de `computeHierarchy`:
+resolver la geometria visible por orden de pintado.
+
+Algoritmo propuesto para SVG:
+
+1. Parsear y aplanar los fills en orden de documento/pintado, conservando
+   `pathIndex`, `shapeIndex`, `layer`, `color` y un `sourceElementId`.
+2. Convertir cada fill a poligono booleano robusto, incluyendo sus holes.
+3. Procesar de arriba hacia abajo manteniendo `coveredAbove`, la union de todo
+   lo que ya fue pintado encima.
+4. Para cada shape: `visible = paintedShape - coveredAbove`.
+5. Si `visible` queda vacio o menor a un umbral de area, descartarlo.
+6. Si `visible` se divide en varias islas, emitir cada isla como contorno
+   seleccionable separado.
+7. Si una isla visible tiene holes reales, emitir exterior + holes con un
+   mismo `elementId`/`visiblePartId`, para que la extrusion los trate como una
+   sola pieza con huecos.
+8. Recalcular `parentIdx`/`depth` sobre los contornos visibles resultantes y
+   continuar con el pipeline actual (`populateShapeData`, seleccion,
+   extrusion, historial y exportacion).
+
+La solucion debe vivir en importacion, no en extrusion. El boton Extruir debe
+seguir trabajando con contornos ya limpios/visibles; asi el mismo arreglo sirve
+para exportar 3MF, abrir en laminador, guardar proyecto y reextruir.
+
+### Alcance recomendado
+
+Primera implementacion solo para SVG/Corel, porque SVG conserva mejor el orden
+visual de pintado. DXF no siempre preserva un orden de dibujo confiable, asi
+que para DXF conviene mantener el comportamiento actual hasta confirmar que el
+export de Corel incluye una senal estable de orden/capa.
+
+La implementacion deberia quedar aislada detras de una funcion/modulo nuevo,
+por ejemplo `SVGVisibleGeometry.resolve(flat)`, para que sea facil desactivarla
+o revertirla sin tocar la extrusion.
+
+### Que NO conviene hacer
+
+- No corregir esto con tolerancias o offsets de contornos: esconderia paredes
+  pero cambiaria dimensiones reales.
+- No intentar deducirlo desde el click/seleccion: ahi ya se perdio el orden
+  visual y la forma inferior ya entro completa.
+- No hacer booleanos directamente en 3D: es mas caro, mas fragil y llegaria
+  tarde. El problema es 2D y debe resolverse antes de crear `State.contours`.
+
+### Plan de verificacion cuando se implemente
+
+- SVG minimo: rectangulo negro abajo + rectangulo naranja encima. Al importar,
+  el negro visible debe quedar recortado; extruir naranja no debe generar pared
+  negra debajo.
+- SVG tipo tucan: el pico naranja/gris/blanco debe quedar separado segun lo
+  visible en Corel; seleccionar una parte debe extruir solo esa region.
+- Letras o formas con holes reales del mismo path deben seguir extruyendo con
+  huecos correctos.
+- Formas donde una capa superior divide una inferior en varias islas deben
+  aparecer como contornos separados.
+- Proyectos `.inkora3d` viejos deben cargar igual que antes, porque ya guardan
+  contornos resueltos y no pasan de nuevo por el importador.
+
 ## 2026-07-25 — La barra superior no era responsive (se recortaba en ventanas angostas)
 
 ### Síntoma
