@@ -514,10 +514,10 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 #slicer-wrap{position:relative;display:none}
 #slicer-wrap.electron-ready{display:block}
 #slicer-panel{
-  position:absolute;top:calc(100% + 7px);left:0;width:224px;
+  position:fixed;top:0;left:0;width:224px;
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
   box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.03);
-  z-index:360;display:none;overflow:hidden;
+  z-index:900;display:none;overflow:hidden;
 }
 #slicer-panel.open{display:block}
 .slicer-header{padding:9px 12px;border-bottom:1px solid var(--border2);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-faint);}
@@ -6930,20 +6930,49 @@ const PanelUI = (() => {
     const labels = { bambu: 'Bambu Studio', orca: 'Orca Slicer' };
     wrap.classList.add('electron-ready');
 
+    function positionPanel() {
+      const rect = btn.getBoundingClientRect();
+      const gap = 7;
+      const pad = 8;
+      const width = panel.offsetWidth || 224;
+      const height = panel.offsetHeight || 120;
+      const left = Utils.clamp(rect.left, pad, Math.max(pad, window.innerWidth - width - pad));
+      const below = rect.bottom + gap;
+      const top = below + height <= window.innerHeight - pad
+        ? below
+        : Math.max(pad, rect.top - height - gap);
+      panel.style.left = `${left}px`;
+      panel.style.top = `${top}px`;
+    }
+
+    function openPanel() {
+      panel.classList.add('open');
+      positionPanel();
+    }
+
+    function closePanel() {
+      panel.classList.remove('open');
+    }
+
     btn.addEventListener('click', e => {
       e.stopPropagation();
       if (btn.disabled) return;
-      panel.classList.toggle('open');
+      if (panel.classList.contains('open')) closePanel();
+      else openPanel();
     });
 
     document.addEventListener('click', e => {
-      if (!wrap.contains(e.target)) panel.classList.remove('open');
+      if (!wrap.contains(e.target) && !panel.contains(e.target)) closePanel();
+    });
+    window.addEventListener('resize', () => { if (panel.classList.contains('open')) positionPanel(); });
+    document.getElementById('header')?.addEventListener('scroll', () => {
+      if (panel.classList.contains('open')) positionPanel();
     });
 
     async function openInSlicer(slicer) {
       if (!State.pieces.length) return;
       const label = labels[slicer] || 'laminador';
-      panel.classList.remove('open');
+      closePanel();
       Utils.toast(`Generando 3MF para ${label}...`, '', 60000);
       try {
         const result = await Exporter.generate3MFBlob(State.pieces, State.filename || 'inkora-model');
