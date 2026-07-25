@@ -13,6 +13,8 @@ jobs:
     # electron-builder necesita Windows real para generar y firmar el
     # instalador NSIS correctamente (no es cross-compilable de forma confiable).
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
