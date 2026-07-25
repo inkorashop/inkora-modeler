@@ -212,4 +212,119 @@ Con Playwright, sobre la misma pieza fusionada de prueba:
 | Línea que se pone blanca al seleccionar el sub-contorno 1, cara top | sí (la duplicada) | **sí (la única que existe)** |
 | Gap de re-extrusión | 0.000000mm | 0.000000mm (sin cambios) |
 
+## 2026-07-25 — Investigación: copiar/pegar desde CorelDRAW sin macro (Ctrl+C → Ctrl+V)
+
+### Pregunta
+
+¿Se puede tener el flujo "Ctrl+C en CorelDRAW → Ctrl+V en INKORA" (import
+directo de vectores, sin exportar/importar archivo a mano) **sin** depender
+de una macro VBA instalada dentro de Corel?
+
+### Qué existía antes (en `Viejo/`, nunca portado a `inkora-3d-modeler-v10-corregido.html`)
+
+Se probaron y documentaron **tres enfoques distintos**, todos ya implementados
+en algún momento de la historia del proyecto (lineage `v25` / `VIEJO 2`), pero
+ninguno vive en la versión actual (`v10`):
+
+1. **Macro VBA dentro de Corel** (`Viejo/InkoraCopySvg.bas`,
+   `Viejo/VIEJO 2/corel/INKORA-Corel.bas`) — el enfoque que terminó
+   funcionando y quedó documentado como el flujo "oficial" en
+   `VIEJO 2/LEEME.md`. El usuario instala la macro una vez (Alt+F11 →
+   GlobalMacros → Importar archivo), la ejecuta con la selección activa, y
+   esta exporta la selección a un DXF temporal (`ActiveDocument.ExportEx`
+   con filtro `CDR_DXF`, rango `CDR_SELECTION`) y escribe ese texto
+   directo al portapapeles de Windows como `CF_UNICODETEXT` (API Win32
+   `OpenClipboard`/`SetClipboardData`, sin dependencias externas). Después,
+   en INKORA, un listener de `paste` en el `document` (ver `VIEJO 2/js/main.js`
+   y `v25`, líneas ~6989-7037) detecta el texto DXF (o SVG) en
+   `clipboardData` y lo pasa por el **mismo parser que usan los archivos
+   .dxf/.svg** — cero código de importación duplicado.
+
+2. **Helper externo sin ninguna macro** (`Viejo/inkora-clipboard-helper.ps1`)
+   — exactamente lo que se preguntó ahora. Un script PowerShell/.NET
+   standalone (con panel flotante + ícono de bandeja, mismo patrón visual
+   que la tarjeta de actualización que armamos para el instalador) que:
+   - Se registra como listener nativo de cambios de portapapeles
+     (`AddClipboardFormatListener`, Win32).
+   - Cuando el portapapeles cambia, revisa si la ventana en foreground era
+     CorelDRAW.
+   - Si lo era, se conecta a CorelDRAW **por COM/automatización externa**
+     (`[Runtime.InteropServices.Marshal]::GetActiveObject("CorelDRAW.Application")`)
+     — no una macro, sino el mismo mecanismo que usan Excel/Word para
+     automatizarse desde Python o PowerShell sin tocar VBA.
+   - Si conecta, exporta la selección activa a SVG (`doc.ExportEx(...,
+     cdrSVG, cdrSelection)`) y **reemplaza** el contenido del portapapeles
+     por ese SVG como texto plano — para cuando el usuario hace Ctrl+V en
+     el navegador/Electron, lo único que hay ahí es SVG, un paste
+     estándar sin ningún permiso especial.
+   - El gesto del usuario en Corel queda **100% nativo**: Ctrl+C normal,
+     sin macro, sin botón, sin instalar nada dentro de Corel.
+
+3. **Fallback 100% manual** (botón "Pegar SVG" + modal, ver `v25` líneas
+   ~472-475 y ~587-605): el usuario exporta a mano desde Corel (`Archivo →
+   Exportar para Web → SVG`), abre el .svg en el Bloc de notas, Ctrl+A,
+   Ctrl+C, y pega el texto en un `<textarea>` dentro de INKORA. Cero
+   automatización de ningún tipo — ni macro ni COM — pero tampoco es
+   "Ctrl+C directo".
+
+### Hallazgo clave: el enfoque 2 (sin macro) ya se probó y falló en la práctica
+
+`Viejo/inkora-helper.log` es un log real de una sesión de uso del helper de
+PowerShell (2026-05-16). **Cada intento** de conexión registrado terminó en
+el mismo error:
+
+```
+ERROR CorelDRAW COM: Excepción al llamar a "GetActiveObject" con los
+argumentos "1": "Operación no disponible (Excepción de HRESULT:
+0x800401E3 (MK_E_UNAVAILABLE))"
+```
+
+`MK_E_UNAVAILABLE` en este contexto significa: CorelDRAW no se registró a
+sí mismo en la **Running Object Table** (ROT) de Windows, así que ningún
+proceso externo puede "engancharse" a la instancia ya abierta vía
+`GetObject`/`GetActiveObject`. Esto es un problema conocido y documentado
+en la comunidad de scripting de Corel (no específico de esta PC ni de esta
+versión) — CorelDRAW es inconsistente registrando su objeto COM en la ROT
+según versión, y una macro VBA **no sufre esto** porque corre adentro del
+proceso de Corel y ya tiene la referencia viva (`ActiveDocument`,
+`Application`) sin necesidad de buscarla desde afuera.
+
+`Viejo/VIEJO 2/ACTUALIZACIONES.md` (entrada v2.0.0) confirma que el
+proyecto **abandonó el helper a propósito** después de esto:
+
+> "Ya no hace falta el helper de PowerShell: la macro de Corel deja el DXF
+> en el portapapeles y el navegador lo recibe con Ctrl+V nativo."
+
+### Conclusión
+
+Con evidencia real (no solo teoría): **no se encontró una forma confiable
+de automatizar completamente el Ctrl+C sin algo corriendo dentro de
+Corel**. La automatización externa por COM (`GetActiveObject`) es la única
+vía "sin macro" investigada hasta ahora, y falló consistentemente por una
+limitación de CorelDRAW (no de este proyecto). La macro VBA es la opción
+más simple que sí funciona de forma confiable, y el costo de "tener una
+macro instalada" es único (una sola vez, `Alt+F11` → importar el .bas) —
+no hay que tocarla de nuevo salvo que se reinstale Corel.
+
+### Posibles próximos pasos (no explorados todavía)
+
+- Probar si `GetObject` sin argumentos (`GetObject(, "CorelDRAW.Application")`
+  vs. `GetActiveObject` específicamente) se comporta distinto — el log solo
+  registra el segundo.
+- Investigar si CorelDRAW 2024 (versión actual, `25.0.0.230`) expone algún
+  mecanismo de registro ROT distinto o una opción de configuración para
+  habilitarlo (no confirmado que exista).
+- Alternativa no probada: en vez de leer el portapapeles después del hecho,
+  usar **UI Automation (UIA)** para disparar programáticamente el propio
+  menú "Exportar" de Corel cuando se detecte Ctrl+C — más frágil (depende
+  de la disposición de menús, puede romperse con actualizaciones de Corel)
+  y no evita el problema de fondo si el objetivo es cero-automatización.
+- Si se retoma el enfoque de macro: ninguna de las dos versiones (`v25`,
+  `VIEJO 2`) está portada a `inkora-3d-modeler-v10-corregido.html` todavía.
+  El trabajo pendiente sería: (a) portar el listener de `paste` +
+  `_importSVGText`/`_importDXFText` + modal "Pegar SVG" desde `v25` (código
+  ya escrito y probado, solo falta portarlo — `SVGParser` y `DXFParser` ya
+  existen en v10, la parte difícil ya está hecha), y (b) decidir si instalar
+  la macro `.bas` en la instalación actual de Corel del usuario.
+
 Sin errores de consola. Sintaxis validada con `node --check`.
