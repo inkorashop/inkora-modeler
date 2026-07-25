@@ -818,3 +818,26 @@ completo), 1366px y 1100px (achicado, todo visible sin scroll:
 1093 > clientWidth 1024` → confirmado que scrollea un poco para el
 último botón en vez de recortar). Sin errores de consola. Sintaxis del
 archivo completo validada con `node --check`.
+
+## 2026-07-25 -- Version visible en HTML/Web/Electron
+
+Para evitar dudas al reiniciar o abrir otra instalacion, la app muestra una
+version visible y sutil junto al logo del header.
+
+Regla:
+
+- La version actual de esta tanda es `v1.0.2`.
+- En web/HTML, `APP_VERSION` usa el fallback fijo `1.0.2` y sincroniza el
+  badge, `document.title` y el meta `inkora-version`.
+- En Electron, `preload.js` expone `window.inkoraAppInfo.version` desde
+  `electron/package.json`; el HTML usa ese valor para mostrar la version real
+  instalada.
+- `electron/package.json` y `electron/package-lock.json` deben avanzar juntos.
+- La metadata `Application` de los 3MF exportados usa `APP_VERSION`, y los
+  proyectos `.inkora3d` nuevos guardan `appVersion`.
+
+Verificacion realizada:
+
+- Sintaxis de scripts inline del HTML validada con `vm.Script`.
+- `node --check electron/main.js` y `node --check electron/preload.js`.
+- `npm.cmd pkg get version` en `electron/` devuelve `1.0.2`.

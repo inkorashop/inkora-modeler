@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { version } = require('./package.json');
 
 // Puente seguro entre el proceso principal (donde vive electron-updater) y la
 // página (inkora-3d-modeler-v10-corregido.html). Si el HTML se abre en un
@@ -11,6 +12,10 @@ contextBridge.exposeInMainWorld('inkoraUpdater', {
   },
   download: () => ipcRenderer.send('updater-download'),
   install: () => ipcRenderer.send('updater-install'),
+});
+
+contextBridge.exposeInMainWorld('inkoraAppInfo', {
+  version,
 });
 
 contextBridge.exposeInMainWorld('inkoraSlicer', {

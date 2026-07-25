@@ -36,6 +36,7 @@ let mainWindow = null;
 
 function createWindow() {
   const win = new BrowserWindow({
+    title: `INKORA 3D Modeler v${app.getVersion()}`,
     width: 1440,
     height: 960,
     minWidth: 960,
