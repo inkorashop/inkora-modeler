@@ -1,6 +1,6 @@
 {
   "name": "inkora-3d-modeler-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "INKORA 3D Modeler empaquetado como app de escritorio (Electron).",
   "main": "main.js",
@@ -29,6 +29,12 @@
       "main.js",
       "preload.js",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../inkora-3d-modeler-v10-corregido.html",
+        "to": "inkora-3d-modeler-v10-corregido.html"
+      }
     ],
     "publish": {
       "provider": "github",

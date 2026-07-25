@@ -3,15 +3,26 @@ const { autoUpdater } = require('electron-updater');
 const fs = require('fs');
 const path = require('path');
 
-// Apunta siempre al HTML real del proyecto (no una copia empaquetada), así
-// cada doble-click abre la última versión guardada sin necesidad de
-// recompilar el .exe cuando solo cambia la app en sí. Ruta absoluta porque
-// electron-builder empaqueta main.js en otra carpeta (resources/app) — un
-// path relativo a __dirname ya no apuntaría al proyecto real una vez compilado.
-// Si el proyecto se mueve/clona en otra PC, cae al relativo como respaldo.
-const ABS_HTML = 'C:/Users/compu/Desktop/INKORA IA/INKORA 3D Modeler/inkora-3d-modeler-v10-corregido.html';
-const FALLBACK_HTML = path.join(__dirname, '..', 'inkora-3d-modeler-v10-corregido.html');
-const APP_HTML = fs.existsSync(ABS_HTML) ? ABS_HTML : FALLBACK_HTML;
+// En mi PC de desarrollo (app.isPackaged === false), apunta al HTML real del
+// proyecto para que cada doble-click abra la última versión guardada sin
+// recompilar el .exe. En cualquier otra PC corriendo desde el código fuente
+// (sin instalar), cae a la ruta relativa. Una vez instalado vía NSIS, el HTML
+// viaja empaquetado dentro de resources/ (ver "extraResources" en
+// package.json) y se carga desde ahí — process.resourcesPath solo existe una
+// vez empaquetado, por eso antes esto rompía en cualquier PC que no fuera la mía.
+const DEV_HTML = 'C:/Users/compu/Desktop/INKORA IA/INKORA 3D Modeler/inkora-3d-modeler-v10-corregido.html';
+const SOURCE_HTML = path.join(__dirname, '..', 'inkora-3d-modeler-v10-corregido.html');
+const BUNDLED_HTML = path.join(process.resourcesPath, 'inkora-3d-modeler-v10-corregido.html');
+
+function resolveAppHtml() {
+  if (!app.isPackaged) {
+    if (fs.existsSync(DEV_HTML)) return DEV_HTML;
+    if (fs.existsSync(SOURCE_HTML)) return SOURCE_HTML;
+  }
+  return BUNDLED_HTML;
+}
+
+const APP_HTML = resolveAppHtml();
 
 let mainWindow = null;
 
