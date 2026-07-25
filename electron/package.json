@@ -1,0 +1,55 @@
+{
+  "name": "inkora-3d-modeler-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "INKORA 3D Modeler empaquetado como app de escritorio (Electron).",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:test": "electron-builder --win --dir",
+    "dist:installer": "electron-builder --win nsis",
+    "dist:publish": "electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.inkora.modeler3d",
+    "productName": "INKORA 3D Modeler",
+    "asar": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "inkorashop",
+      "repo": "inkora-modeler"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        { "target": "dir" },
+        { "target": "nsis" }
+      ]
+    },
+    "nsis": {
+      "artifactName": "INKORA-3D-Modeler-Setup.exe",
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}
