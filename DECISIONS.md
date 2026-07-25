@@ -328,3 +328,125 @@ no hay que tocarla de nuevo salvo que se reinstale Corel.
   la macro `.bas` en la instalación actual de Corel del usuario.
 
 Sin errores de consola. Sintaxis validada con `node --check`.
+
+## 2026-07-25 (seguimiento) — Ctrl+V portado a v10 + decisión: sí macro
+
+Retomando lo de arriba: el usuario confirmó explícitamente que prefiere la
+**macro VBA** (la única vía que probó funcionar) en vez de reintentar COM/UI
+Automation o quedarse solo con el fallback manual. Con esa decisión tomada,
+se portó el flujo completo a `inkora-3d-modeler-v10-corregido.html`.
+
+### Qué se portó (no se copió v25 completo — se adaptó a la arquitectura de v10)
+
+`DXFParser` y `SVGParser` de v10 usaban `loadFile(file)` con `FileReader`
+como único punto de entrada. Se dividió cada uno en:
+
+- `loadFile(file)` — sigue leyendo un `File` con `FileReader`, ahora delega
+  el parseo a `loadText`.
+- `loadText(text)` — el parseo real (tokenize/hierarchy en DXF; SVGLoader +
+  cómputo de huecos en SVG), a partir de texto ya en memoria.
+
+Esto evita duplicar el parser para el caso "texto pegado" (a diferencia de
+v25, que para DXF pegado envolvía el texto en un `File` sintético con
+`new File([dxfText], ...)` solo para poder llamar a `loadFile` — funcional,
+pero un rodeo innecesario ahora que `loadText` existe directamente).
+
+En `loadDXF(file)` (el handler de importar archivo/arrastrar), la parte que
+arma `State.contours` a partir de `shapeData` se extrajo a
+`populateShapeData(shapeData, filename)` — reusada tanto por import de
+archivo como por lo pegado, para que exista un solo lugar que "puebla la
+escena desde una lista de shapes ya parseada".
+
+Se agregó:
+
+- `importPastedText(text, sourceName)` — detecta si el texto es DXF
+  (`_looksLikeDXFText`: busca `0\nSECTION` + `2\nENTITIES`) o SVG
+  (`_looksLikeSVGText`: empieza con `<svg`, o contiene `<svg ` / `<?xml`),
+  llama al `loadText` del parser correspondiente, y llama a
+  `populateShapeData`.
+- Listener `document.addEventListener('paste', ...)` — ignora el evento si
+  el foco está en un `INPUT`/`TEXTAREA` (para no romper el paste normal de
+  esos campos), intenta leer `image/svg+xml` de los `clipboardData.items`,
+  si no hay cae a `text/plain`, y como último recurso busca un `<svg>...`
+  embebido en `text/html`. Si nada matchea, no hace `preventDefault` —
+  deja que el paste siga su curso normal.
+- Botón **"Pegar SVG"** en el header + modal (textarea) — fallback 100%
+  manual, sin macro ni COM: exportás SVG a mano desde Corel, pegás el texto,
+  clic en "Importar". Llama al mismo `importPastedText`.
+
+### Qué NO se portó de v25
+
+El `SVGParser` de v25 es una implementación manual completamente distinta
+(parsea el DOM del SVG a mano, con su propio `computeHier`/`colorSource`) a
+la de v10 (basada en `THREE.SVGLoader` + `DXFParser.computeHierarchy`
+reusada). Se decidió **no** reemplazar el `SVGParser` de v10 por el de v25
+— haría eso sería introducir una segunda implementación de parseo SVG con
+comportamiento distinto al que ya tienen los `.svg` importados por archivo
+en v10, rompiendo justo el principio de "un solo parser para archivo y para
+pegado" que es el objetivo de este cambio. En cambio, se le agregó
+`loadText` al `SVGParser` que ya vive en v10.
+
+### Instalación de la macro
+
+Se copió `Viejo/InkoraCopySvg.bas` (sin modificarlo) a `corel-macro/` en la
+raíz del proyecto, junto con `corel-macro/LEEME.md` con los pasos de
+instalación (`Alt+F11` → importar `.bas`) y una nota de por qué es macro y
+no COM externo. `Viejo/` no se tocó.
+
+### Verificación
+
+Con Chrome DevTools MCP, sobre `inkora-3d-modeler-v10-corregido.html`
+abierto directo (`file://`):
+
+- Disparado un evento `paste` sintético con un SVG de rectángulo en
+  `clipboardData` (`text/plain`) → importado correctamente ("1 contorno(s)
+  cargados"), extruido sin problemas.
+- Modal "Pegar SVG" con un DXF de prueba pegado a mano en el textarea →
+  importado correctamente, modal se cierra solo al confirmar con éxito.
+- Sin errores nuevos en consola (el único error registrado es un warning
+  de seguridad de Chrome sobre `file://` no relacionado con este cambio).
+
+## 2026-07-25 (bug no relacionado) — El panel de color se cerraba al soltar el slider de gama, no al elegir el color
+
+### Síntoma
+
+Al cambiar el color de una pieza: mover el slider de gama (canvas
+`color-hue`, para ir p. ej. de verde a rojo) y soltarlo cerraba el popover
+inmediatamente, sin dar tiempo a clickear después el cuadrado de
+saturación/brillo (`color-square`) para elegir el tono final dentro de esa
+gama.
+
+### Causa raíz
+
+En el IIFE del color picker, el listener global de `pointerup` cerraba el
+popover si `active` tenía cualquier valor truthy, sin distinguir cuál de
+los dos controles se había soltado:
+
+```js
+window.addEventListener('pointerup', () => {
+  if (active) closePicker(true);
+});
+```
+
+`active` vale `'square'` mientras se arrastra el cuadrado, o `'hue'`
+mientras se arrastra el slider de gama — ambos casos disparaban el cierre.
+
+### Solución
+
+Solo el cuadrado representa "elegir un color efectivamente" (gama + brillo
+ya definidos). Soltar el slider de gama debe dejar de arrastrar sin cerrar:
+
+```js
+window.addEventListener('pointerup', () => {
+  if (active === 'square') closePicker(true);
+  active = null;
+});
+```
+
+### Verificación
+
+Con Chrome DevTools MCP: simulado `pointerdown` + `pointermove` +
+`pointerup` sobre `#color-hue` → el popover queda abierto
+(`display:block`). Simulado el mismo gesto sobre `#color-square` → el
+popover se cierra (`display:none`), confirmando que el commit de color
+sigue funcionando igual que antes.

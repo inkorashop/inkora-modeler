@@ -584,6 +584,10 @@ html.light{
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Importar DXF/SVG
     </button>
+    <button class="btn" id="btn-paste-svg" title="Pegar DXF/SVG copiado (Ctrl+C en CorelDRAW → Ctrl+V acá, o pegar texto SVG a mano)">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2.5h4v1.2H4V2.5zM3 3.5h6v7H3v-7z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+      Pegar SVG
+    </button>
     <button class="btn" id="btn-open-project" title="Abrir proyecto INKORA 3D (Ctrl+O)">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9.5h8V4.2H6.2L5.1 3H2v6.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
       Abrir proyecto
@@ -642,6 +646,25 @@ html.light{
     <input type="file" id="file-input" accept=".dxf,.svg" style="display:none">
     <input type="file" id="project-input" accept=".inkora3d,.json" style="display:none">
   </header>
+
+  <!-- Modal: Pegar SVG/DXF manualmente (fallback sin Ctrl+V automático) -->
+  <div id="svg-paste-modal" style="display:none;position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.72);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+    <div style="width:480px;max-width:92vw;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.5);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <span style="font-family:var(--display);font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--accent);text-transform:uppercase;">Pegar SVG/DXF</span>
+        <button id="svg-paste-close" style="background:none;border:none;color:var(--text-faint);font-size:16px;cursor:pointer;padding:2px 6px;border-radius:4px;line-height:1;" title="Cerrar">✕</button>
+      </div>
+      <p style="font-size:11.5px;color:var(--text-dim,var(--text-faint));line-height:1.5;margin:0 0 8px;">
+        En CorelDRAW: <b>Archivo → Exportar para Web → SVG</b>, abrí el .svg en el Bloc de notas,
+        Ctrl+A, Ctrl+C, y pegá el texto acá abajo.
+      </p>
+      <textarea id="svg-paste-area" placeholder="&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot; ...&gt; ... &lt;/svg&gt;" style="width:100%;height:180px;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:var(--mono);font-size:11px;padding:8px;resize:vertical;outline:none;line-height:1.5;box-sizing:border-box;"></textarea>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
+        <button class="btn" id="svg-paste-cancel">Cancelar</button>
+        <button class="btn primary" id="svg-paste-ok">Importar</button>
+      </div>
+    </div>
+  </div>
 
   <div id="project-tabs-row">
     <button class="btn" id="btn-new-project" title="Crear una pestaña de proyecto nueva">+ Proyecto</button>
@@ -1699,7 +1722,13 @@ const DXFParser = (() => {
       r.onerror = () => rej(new Error('No se pudo leer el archivo'));
       r.readAsText(file, 'latin1');
     });
+    return loadText(text);
+  }
 
+  // loadText: mismo parseo que loadFile, pero a partir de texto ya en
+  // memoria (portapapeles) en vez de un File — usado por Ctrl+V para pegar
+  // DXF copiado desde CorelDRAW sin pasar por exportar/importar archivo.
+  async function loadText(text) {
     // Ceder al browser para que el toast "Leyendo DXF…" alcance a pintar
     // antes de que las operaciones síncronas bloqueen el hilo principal.
     await new Promise(ok => setTimeout(ok, 0));
@@ -1735,7 +1764,7 @@ const DXFParser = (() => {
   // computeHierarchy es puramente geométrica (point-in-polygon sobre shapes
   // ya construidos) — no depende de nada específico de DXF. Se expone para
   // que SVGParser la reutilice en vez de reimplementar detección de huecos.
-  return {loadFile, computeHierarchy};
+  return {loadFile, loadText, computeHierarchy};
 })();
 
 /* ══════════════════════════════════════════════════════
@@ -1849,7 +1878,12 @@ const SVGParser = (() => {
       r.onerror = () => rej(new Error('No se pudo leer el archivo'));
       r.readAsText(file, 'utf-8');
     });
+    return loadText(text);
+  }
 
+  // loadText: mismo parseo que loadFile, pero a partir de texto ya en
+  // memoria (portapapeles) en vez de un File — usado por Ctrl+V.
+  async function loadText(text) {
     await new Promise(ok => setTimeout(ok, 0));
 
     const loader = new THREE.SVGLoader();
@@ -1895,7 +1929,7 @@ const SVGParser = (() => {
     }));
   }
 
-  return { loadFile };
+  return { loadFile, loadText };
 })();
 
 
@@ -6199,6 +6233,42 @@ const PanelUI = (() => {
     else Utils.toast('Solo se aceptan archivos .dxf o .svg','err');
   });
 
+  // populateShapeData: arma la escena (State.contours + meshes 2D) a partir
+  // de la lista de shapes ya parseada — el mismo paso final para archivo
+  // arrastrado/elegido, drag&drop, y texto pegado (Ctrl+V), así ningún
+  // camino de importación duplica esta lógica.
+  function populateShapeData(shapeData, filename){
+    History.clear();   // carga nueva = historial fresco
+    PanelUI.clearAllSelection();
+    Viewport.clearAll();State.reset();
+    GeoModule.resetCounter();
+    // Snapshot del estado VACÍO antes de poblarlo — así Ctrl+Z funciona
+    // incluso en la primera importación (antes no había nada anterior
+    // a lo que volver, así que "deshacer" no hacía nada).
+    History.push(State);
+    State.filename=filename;
+    shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color},i)=>{
+      // color se guarda TAL CUAL viene (puede ser null = "sin color
+      // explícito"). No se hornea el default acá — así, si el usuario
+      // cambia de tema después de importar, refreshContourVisuals()
+      // vuelve a resolverlo con Utils.defaultContourColor() y sigue
+      // viéndose bien en el tema nuevo.
+      const dxfColor = Utils.contourDisplayColor(color);
+      const flatMesh=GeoModule.makeFlat(shape,offX,offY,dxfColor);
+      const outlineMesh=GeoModule.makeOutline(shape,offX,offY,dxfColor);
+      Viewport.add2D(flatMesh);Viewport.add2D(outlineMesh);
+      // depth y parentIdx vienen del parser: permiten saber si este contorno
+      // es un hueco de otro al momento de extruir
+      State.contours.push({shape,offX,offY,depth,parentIdx,layer,color,flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null});
+    });
+    PanelUI.renderList();PanelUI.refreshContourVisuals();PanelUI.updateModeBadge();
+    Viewport.focusAll();
+    // Snapshot del estado base DESPUÉS de construir toda la escena
+    History.push(State);
+    ProjectTabs.syncActiveFromState();
+    Utils.toast(`${shapeData.length} contorno(s) cargados. Seleccioná y extruí.`,'ok');
+  }
+
   async function loadDXF(file){
     const isSVG = /\.svg$/i.test(file.name);
     const parser = isSVG ? SVGParser : DXFParser;
@@ -6206,37 +6276,100 @@ const PanelUI = (() => {
     try {
       const shapeData=await parser.loadFile(file);
       if(!shapeData.length){Utils.toast('No se encontraron contornos cerrados.','err');return;}
-      History.clear();   // carga nueva = historial fresco
-      PanelUI.clearAllSelection();
-      Viewport.clearAll();State.reset();
-      GeoModule.resetCounter();
-      // Snapshot del estado VACÍO antes de poblarlo — así Ctrl+Z funciona
-      // incluso en la primera importación (antes no había nada anterior
-      // a lo que volver, así que "deshacer" no hacía nada).
-      History.push(State);
-      State.filename=file.name.replace(/\.(dxf|svg)$/i,'');
-      shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color},i)=>{
-        // color se guarda TAL CUAL viene (puede ser null = "sin color
-        // explícito"). No se hornea el default acá — así, si el usuario
-        // cambia de tema después de importar, refreshContourVisuals()
-        // vuelve a resolverlo con Utils.defaultContourColor() y sigue
-        // viéndose bien en el tema nuevo.
-        const dxfColor = Utils.contourDisplayColor(color);
-        const flatMesh=GeoModule.makeFlat(shape,offX,offY,dxfColor);
-        const outlineMesh=GeoModule.makeOutline(shape,offX,offY,dxfColor);
-        Viewport.add2D(flatMesh);Viewport.add2D(outlineMesh);
-        // depth y parentIdx vienen del parser: permiten saber si este contorno
-        // es un hueco de otro al momento de extruir
-        State.contours.push({shape,offX,offY,depth,parentIdx,layer,color,flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null});
-      });
-      PanelUI.renderList();PanelUI.refreshContourVisuals();PanelUI.updateModeBadge();
-      Viewport.focusAll();
-      // Snapshot del estado base DESPUÉS de construir toda la escena
-      History.push(State);
-      ProjectTabs.syncActiveFromState();
-      Utils.toast(`${shapeData.length} contorno(s) cargados. Seleccioná y extruí.`,'ok');
+      populateShapeData(shapeData, file.name.replace(/\.(dxf|svg)$/i,''));
     } catch(err){Utils.toast('Error: '+err.message,'err');console.error(err);}
   }
+
+  // ── Pegar desde CorelDRAW (Ctrl+C en Corel → Ctrl+V acá) ─────────────────
+  // Reusa DXFParser/SVGParser.loadText — el mismo parser que ya usan los
+  // archivos .dxf/.svg — para no duplicar lógica de importación. Ver
+  // DECISIONS.md 2026-07-25: la única vía confiable para el "Ctrl+C" es la
+  // macro de Corel (Viejo/InkoraCopySvg.bas) escribiendo DXF al portapapeles
+  // como texto plano; la automatización externa por COM falló siempre con
+  // MK_E_UNAVAILABLE (Corel no se registra en la ROT de Windows).
+  function _looksLikeDXFText(txt){
+    if(!txt) return false;
+    const s=String(txt).slice(0,20000).replace(/\r\n|\r/g,'\n');
+    return /(^|\n)\s*0\s*\n\s*SECTION\s*(\n|$)/i.test(s) &&
+           /(^|\n)\s*2\s*\n\s*ENTITIES\s*(\n|$)/i.test(s);
+  }
+  function _looksLikeSVGText(txt){
+    if(!txt) return false;
+    const s=txt.trimStart();
+    return s.startsWith('<svg')||txt.includes('<svg ')||txt.includes('<?xml');
+  }
+
+  async function importPastedText(text, sourceName){
+    const isSVG = _looksLikeSVGText(text);
+    const isDXF = !isSVG && _looksLikeDXFText(text);
+    if(!isSVG && !isDXF){
+      Utils.toast('El texto pegado no parece ser DXF ni SVG.','err');
+      return false;
+    }
+    const parser = isSVG ? SVGParser : DXFParser;
+    Utils.toast(isSVG ? 'Leyendo SVG…' : 'Leyendo DXF…','',60000);
+    try {
+      const shapeData = await parser.loadText(text);
+      if(!shapeData.length){Utils.toast('No se encontraron contornos cerrados.','err');return false;}
+      populateShapeData(shapeData, sourceName||'portapapeles');
+      return true;
+    } catch(err){Utils.toast('Error: '+err.message,'err');console.error(err);return false;}
+  }
+
+  document.addEventListener('paste', async e=>{
+    const tag=document.activeElement?.tagName;
+    if(tag==='INPUT'||tag==='TEXTAREA') return; // dejar que los inputs reciban el paste normal
+
+    let svgText='';
+    // 1) MIME type nativo image/svg+xml (algunos exportadores lo escriben así)
+    for(const item of (e.clipboardData?.items||[])){
+      if(item.type==='image/svg+xml'){
+        svgText = await new Promise(res=>item.getAsString(res));
+        break;
+      }
+    }
+    const plain = e.clipboardData?.getData('text/plain')||'';
+    if(!svgText && _looksLikeSVGText(plain)) svgText = plain;
+
+    // 2) Fallback: text/html con SVG embebido
+    if(!svgText){
+      const html=e.clipboardData?.getData('text/html')||'';
+      const m=html.match(/<svg[\s\S]*?<\/svg>/i);
+      if(m) svgText=m[0];
+    }
+
+    const dxfText = !svgText && _looksLikeDXFText(plain) ? plain : '';
+
+    if(svgText || dxfText){
+      e.preventDefault();
+      await importPastedText(svgText||dxfText, 'portapapeles');
+    }
+    // Si no hay DXF/SVG reconocible, no se hace preventDefault: se deja que
+    // el paste normal del navegador siga su curso (p. ej. pegar en un campo
+    // que no detectamos como INPUT/TEXTAREA por alguna razón).
+  });
+
+  // ── Modal "Pegar SVG/DXF" — fallback 100% manual, sin macro ni COM ──────
+  (() => {
+    const modal = document.getElementById('svg-paste-modal');
+    const area  = document.getElementById('svg-paste-area');
+    function openModal(){ modal.style.display='flex'; area.value=''; setTimeout(()=>area.focus(),80); }
+    function closeModal(){ modal.style.display='none'; area.value=''; }
+    document.getElementById('btn-paste-svg').addEventListener('click', openModal);
+    document.getElementById('svg-paste-close').addEventListener('click', closeModal);
+    document.getElementById('svg-paste-cancel').addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if(e.target===modal) closeModal(); });
+    document.getElementById('svg-paste-ok').addEventListener('click', async () => {
+      const txt = (area.value||'').trim();
+      if(!txt){ Utils.toast('Pegá el texto DXF o SVG primero.','err'); return; }
+      const ok = await importPastedText(txt, 'portapapeles');
+      if(ok) closeModal();
+    });
+    // Ctrl+Enter en el textarea confirma
+    area.addEventListener('keydown', e => {
+      if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ e.preventDefault(); document.getElementById('svg-paste-ok').click(); }
+    });
+  })();
 
   document.getElementById('btn-extrude').addEventListener('click',()=>{
     // Extruir contornos 2D seleccionados
@@ -6828,7 +6961,12 @@ const PanelUI = (() => {
       else pickFromHue(e);
     });
     window.addEventListener('pointerup', () => {
-      if (active) closePicker(true);
+      // Solo el cuadrado (saturación/brillo) representa "elegir un color
+      // efectivamente" — soltar el slider de gama (hue) solo debe dejar de
+      // arrastrar, sin cerrar el popover, para poder recién ahí clickear
+      // el cuadrado con la gama ya elegida.
+      if (active === 'square') closePicker(true);
+      active = null;
     });
     document.addEventListener('mousedown', e => {
       if (pop.style.display === 'none') return;
