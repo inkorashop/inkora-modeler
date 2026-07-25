@@ -450,3 +450,154 @@ Con Chrome DevTools MCP: simulado `pointerdown` + `pointermove` +
 (`display:block`). Simulado el mismo gesto sobre `#color-square` → el
 popover se cierra (`display:none`), confirmando que el commit de color
 sigue funcionando igual que antes.
+
+## 2026-07-25 — El highlight de hover/selección siempre "lavaba" el color hacia blanco
+
+### Síntoma
+
+Al posar el mouse o seleccionar una pieza extruida (o un contorno 2D),
+el resaltado se veía casi siempre como un lavado hacia blanco/gris: en
+piezas negras o de colores saturados (rojo, azul, etc.) quedaba
+demasiado claro/blanquecino; en piezas blancas casi no se notaba
+cambio.
+
+### Causa raíz
+
+`Viewport._applyHighlight(mesh, mode)` calculaba correctamente la
+luminancia del color base y decidía "aclarar" o "oscurecer" según
+corresponda, pero la rama de aclarado para colores oscuros/saturados no
+tocaba el color real: sumaba un **glow `emissive` blanco parejo**
+(`emissive = 0xffffff`, intensidad 0.22 hover / 0.42 select) en vez de
+mezclar el color base hacia blanco. Un `MeshStandardMaterial` con
+emissive blanco se ve lavado hacia blanco/gris sin importar el matiz
+del color base — por eso negro, rojo o azul se veían todos tirando a
+blanco en vez de "negro más claro" o "rojo más claro". La rama de
+piezas claras sí modificaba el color real (`multiplyScalar`), por eso
+el problema solo aparecía para la mitad oscura/saturada de la paleta.
+El hover 2D (`setHoverVisual`, rama no extruida) tenía un problema
+menor análogo: aclaraba con `color.addScalar(0.20)`, un desplazamiento
+parejo por canal que no escala con la intensidad hover/select ni es
+consistente con la lógica 3D.
+
+### Solución
+
+Una sola mezcla de color, simétrica en ambas direcciones, sin
+`emissive`: el color base se interpola (`THREE.Color.lerp`) hacia
+negro (si es claro, `lum > 0.45`) o hacia blanco (si es oscuro), en
+una proporción fija según el modo — `HIGHLIGHT_MIX_HOVER = 0.22` /
+`HIGHLIGHT_MIX_SELECT = 0.42`, las mismas dos constantes que antes eran
+implícitas en el emissive. Al mezclar el color real (no sumar luz
+encima) el matiz se conserva: un rojo resaltado se ve rojo más claro,
+no gris/blanco. El hover 2D (`setHoverVisual`) se alineó a la misma
+fórmula y a la misma constante `HIGHLIGHT_MIX_HOVER`, reemplazando el
+`multiplyScalar`/`addScalar` ad hoc que tenía antes — un solo mecanismo
+para decidir "cómo se ve resaltado un color", no una fórmula por caso.
+
+### Verificación
+
+Con Chrome DevTools MCP, extruyendo una pieza y forzando su color a
+cinco valores de prueba, comparando antes/después:
+
+| Color base | Hover (antes) | Hover (después) | Select (antes) | Select (después) |
+|---|---|---|---|---|
+| `#000000` (negro) | color `#000000` + emissive blanco 0.22 (lavado) | `#383838` | color `#000000` + emissive blanco 0.42 (lavado) | `#6b6b6b` |
+| `#ffffff` (blanco) | `#adadad` | `#c6c6c6` | `#7f7f7f` | `#939393` |
+| `#ff0000` (rojo) | `#ff0000` + emissive blanco 0.22 (lavado a rosa/blanco) | `#ff3838` (rojo más claro) | `#ff0000` + emissive blanco 0.42 (lavado) | `#ff6b6b` (rojo más claro) |
+| `#0000ff` (azul) | (mismo problema que rojo) | `#3838ff` (azul más claro) | (mismo problema que rojo) | `#6b6bff` (azul más claro) |
+| `#808080` (gris medio) | `#575757` | `#636363` | `#404040` | `#4a4a4a` |
+
+Select siempre más fuerte que hover en ambas versiones; la diferencia
+es que ahora el matiz del color base se conserva en vez de lavarse a
+blanco. Sin errores de consola. Sintaxis del archivo completo validada
+con `node --check`.
+
+## Seguimiento (mismo día) — el mismo fix, pero con los números equivocados
+
+Con capturas de pantalla reales del viewport (no solo leyendo el hex del
+material), el fix de arriba seguía sin notarse: negro quedaba demasiado
+claro, blanco casi no se oscurecía. La lógica (mezclar hacia
+blanco/negro según luminancia) era correcta — los **valores** (0.22
+hover / 0.42 select) no.
+
+### Causa: los valores se habían calibrado contra el color plano, no contra el render real
+
+El viewport usa `THREE.ACESFilmicToneMapping` (exposure 1.05) más tres
+luces (`AmbientLight` 0.45, `DirectionalLight` sol 1.2, `DirectionalLight`
+relleno 0.45 — ver `setupScene`). Dos efectos que un cálculo de color
+plano no contempla:
+
+1. **Oscurecer un color claro casi no se nota.** Un blanco con el
+   albedo bajado a la mitad (`lerp` 0.5 hacia negro) sigue iluminado por
+   ~2.1x de luz de escena — el resultado antes del tonemap sigue
+   saturado cerca de 1.0, y ACES comprime fuertísimo esa zona alta. Solo
+   se empieza a notar un gris real pasado ~0.85 de mezcla hacia negro
+   (confirmado leyendo píxeles reales del canvas con
+   `renderer.readPixels`, no estimando).
+2. **Aclarar un color oscuro subiendo el albedo se vuelve a lavar a
+   blanco.** Es exactamente el mecanismo del bug original: cualquier
+   suba de albedo en una pieza iluminada se multiplica de nuevo por las
+   luces de escena y se vuelve a comprimir hacia blanco en el tonemap.
+   Por eso la primera versión de este fix, aunque ya no usaba `emissive`
+   fijo en blanco, seguía viéndose lavada — el problema no era "blanco
+   parejo" sino "cualquier cosa que dependa de re-iluminar el albedo".
+
+### Solución: medir píxeles reales, no asumir la teoría de color plano
+
+Con Chrome DevTools MCP + `Viewport.getRenderer().domElement` +
+`gl.readPixels()`, se midió la curva real de brillo renderizado para
+varios valores de mezcla, en vez de adivinar:
+
+| Mezcla hacia negro (blanco) | Píxel renderizado (R) |
+|---|---|
+| 0 (base) | 230 |
+| 0.5 | 217 |
+| 0.7 | 201 |
+| 0.85 | 169 |
+| 0.9 | 145 |
+
+Con esa curva medida se recalibraron las constantes:
+
+- **Colores claros** (`lum > 0.45`): se mantiene la mezcla de color real
+  hacia negro, pero con valores mucho más agresivos de lo que la teoría
+  de color plano sugeriría — `HIGHLIGHT_DARKEN_HOVER = 0.70`,
+  `HIGHLIGHT_DARKEN_SELECT = 0.88`.
+- **Colores oscuros/saturados** (`lum ≤ 0.45`): en vez de tocar el
+  albedo (que se vuelve a lavar por las luces), se le agrega un
+  `emissive` — que en three.js se suma directo, sin volver a
+  multiplicarse por las luces de escena, así que es predecible — pero
+  **teñido con el propio color base** (`orig.lerp(blanco, 0.5)`) en vez
+  de blanco puro, para que el brillo agregado se vea "rojo más claro" o
+  "gris" y no un flash blanco genérico. `HIGHLIGHT_GLOW_HOVER = 0.18`,
+  `HIGHLIGHT_GLOW_SELECT = 0.40`.
+
+### Por qué no unificar en un solo mecanismo (todo emissive o todo albedo)
+
+Emissive no puede oscurecer (solo suma luz), así que los colores claros
+siguen necesitando la mezcla de albedo. Y el albedo no puede aclarar de
+forma predecible en una pieza ya iluminada (ese es el bug). Cada
+dirección necesita el mecanismo que sí controla ese sentido del cambio
+de forma predecible — la rama que decide cuál usar sigue siendo una
+sola (`lum > 0.45`), no se duplicó nada.
+
+### Verificación
+
+Con Chrome DevTools MCP, extruyendo 3 piezas (negro, blanco, rojo) y
+leyendo píxeles reales del canvas (`gl.readPixels`) antes/después de
+aplicar cada highlight con el código real (`Viewport.applyHighlight`,
+sin duplicar la lógica en el test):
+
+| Color | Base (RGB aprox.) | Hover | Select |
+|---|---|---|---|
+| Negro | 36,38,44 | ~90-105 (gris) | ~142-145 (gris medio) |
+| Blanco | 230,230,231 | ~201 (gris claro) | ~155-170 (gris medio) |
+| Rojo `#ff0000` | 241,111,76 | 241,146,124 (rojo más claro) | 241,171,158 (salmón) |
+
+Select siempre más fuerte que hover; negro y blanco convergen a un gris
+medio similar en `select` (buscado, se ve como "resaltado" sin importar
+el color de origen); los colores saturados conservan su matiz en vez de
+lavarse. Confirmado también con capturas de pantalla del render
+completo, no solo valores de píxel aislados. El caso 2D (contornos no
+extruidos, `MeshBasicMaterial` sin luces) no sufre este problema —
+medido aparte, la mezcla existente (0.22) ya se ve bien porque no hay
+relighting ni tonemap agresivo de por medio. Sin errores de consola.
+Sintaxis del archivo completo validada con `node --check`.

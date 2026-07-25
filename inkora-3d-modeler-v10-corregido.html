@@ -2315,12 +2315,8 @@ const Viewport = (() => {
           const g2 = ((origHex >>  8) & 0xff) / 255;
           const b2 = ( origHex        & 0xff) / 255;
           const lum2 = 0.299*r2 + 0.587*g2 + 0.114*b2;
-          mesh.material.color.setHex(origHex);
-          if (lum2 > 0.45) {
-            mesh.material.color.multiplyScalar(0.65); // claro → oscurecer
-          } else {
-            mesh.material.color.addScalar(0.20);      // oscuro → aclarar
-          }
+          const target2 = lum2 > 0.45 ? 0x000000 : 0xffffff;
+          mesh.material.color.setHex(origHex).lerp(new THREE.Color(target2), HIGHLIGHT_MIX_HOVER);
           mesh.material.colorWrite = true;
           mesh.material.opacity = Math.min(0.92, mesh.userData._hoverOrigOpacity + 0.18);
         } else {
@@ -2365,7 +2361,31 @@ const Viewport = (() => {
       child.material?.dispose();
     });
   }
-  // Aplica highlight adaptativo (hover=suave, select=fuerte) según luminancia del color base
+  // Valores calibrados a OJO Y A PÍXEL contra el pipeline de render real
+  // (ACESFilmicToneMapping + luces direccionales, ver setupScene) — no son
+  // arbitrarios. Midiendo con Viewport.getRenderer()+readPixels():
+  //   - Colores claros (blanco) mezclados hacia negro por debajo de ~0.7 se
+  //     ven prácticamente idénticos al original: el tonemapping ACES
+  //     comprime tanto la zona alta que un blanco con albedo 0.5 sigue
+  //     renderizando casi blanco. Recién a partir de ~0.85 se nota un gris
+  //     medio real. Por eso HIGHLIGHT_DARKEN es mucho más agresivo de lo
+  //     que parece "debería" hacer falta en teoría de color plano.
+  //   - Colores oscuros/saturados (negro, rojo, azul) NO deben aclararse
+  //     subiendo el albedo: al estar iluminados por las luces de la escena,
+  //     cualquier suba de albedo se vuelve a multiplicar por la luz y el
+  //     tonemap la vuelve a lavar hacia blanco/gris parejo — el bug
+  //     original. En cambio se les suma un glow `emissive` (no se
+  //     re-multiplica por las luces, es predecible) teñido con el propio
+  //     color base (mezclado 50% hacia blanco), para que el brillo agregado
+  //     se vea "rojo más claro" o "gris" y no un flash blanco genérico.
+  const HIGHLIGHT_DARKEN_HOVER = 0.70;
+  const HIGHLIGHT_DARKEN_SELECT = 0.88;
+  const HIGHLIGHT_GLOW_HOVER = 0.18;
+  const HIGHLIGHT_GLOW_SELECT = 0.40;
+  const HIGHLIGHT_GLOW_TINT = 0.5; // qué tan cerca de blanco queda el glow teñido
+  // Aplica highlight adaptativo (hover=suave, select=fuerte) según luminancia
+  // del color base — oscurece por mezcla real de color si es claro, agrega
+  // un glow teñido con el propio tono si es oscuro/saturado.
   function _applyHighlight(mesh, mode) {
     // Guardar color original ANTES de cualquier modificación (solo la primera vez)
     if (mesh.userData._highlightOrigColor == null) {
@@ -2373,22 +2393,21 @@ const Viewport = (() => {
     }
     // Restaurar color base para calcular luminancia correctamente
     const origHex = mesh.userData._highlightOrigColor;
-    const r = ((origHex >> 16) & 0xff) / 255;
-    const g = ((origHex >>  8) & 0xff) / 255;
-    const b = ( origHex        & 0xff) / 255;
-    const lum = 0.299*r + 0.587*g + 0.114*b;
+    const orig = new THREE.Color(origHex);
+    const lum = 0.299*orig.r + 0.587*orig.g + 0.114*orig.b;
+    const select = mode === 'select';
 
     if (lum > 0.45) {
-      // Color claro → resalte oscuro: oscurecer el color base
+      // Claro → oscurecer mezclando el color real hacia negro
       mesh.material.emissive?.set(0x000000);
       mesh.material.emissiveIntensity = 0;
-      mesh.material.color.setHex(origHex);
-      mesh.material.color.multiplyScalar(mode === 'select' ? 0.50 : 0.68);
+      mesh.material.color.copy(orig).lerp(new THREE.Color(0x000000), select ? HIGHLIGHT_DARKEN_SELECT : HIGHLIGHT_DARKEN_HOVER);
     } else {
-      // Color oscuro → resalte claro: emissive blanco
-      mesh.material.color.setHex(origHex);
-      mesh.material.emissive?.set(0xffffff);
-      mesh.material.emissiveIntensity = mode === 'select' ? 0.42 : 0.22;
+      // Oscuro/saturado → color base intacto + glow teñido con su propio tono
+      mesh.material.color.copy(orig);
+      const glow = orig.clone().lerp(new THREE.Color(0xffffff), HIGHLIGHT_GLOW_TINT);
+      mesh.material.emissive?.copy(glow);
+      mesh.material.emissiveIntensity = select ? HIGHLIGHT_GLOW_SELECT : HIGHLIGHT_GLOW_HOVER;
     }
   }
   function _clearHighlight(mesh) {
