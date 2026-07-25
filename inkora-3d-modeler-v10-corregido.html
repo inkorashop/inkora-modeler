@@ -1807,24 +1807,34 @@ const DXFParser = (() => {
 
     if (!shapes.length) return [];
 
-    // Segunda cesión: computeHierarchy con muchos shapes puede tomar >16ms
+    // Segunda cesion: resolver visibilidad y hierarchy con muchos shapes puede tomar >16ms
     await new Promise(ok => setTimeout(ok, 0));
 
-    const hierarchy = computeHierarchy(shapes);
+    const flat = SVGVisibleGeometry.resolve(shapes.map((sh, i) => ({
+      rings: [sh.getPoints(128).map(p => ({ x: p.x, y: p.y }))],
+      layer: sh.userData?.layer || '0',
+      color: normalizeHex(sh.userData?.color),
+      elementId: `dxf:${i}`,
+    })));
+
+    if (!flat.length) return [];
+
+    const hierarchy = computeHierarchy(flat.map(f => f.shape));
     let gMinX = Infinity, gMaxX = -Infinity, gMinY = Infinity, gMaxY = -Infinity;
-    shapes.forEach(sh => {
-      const b = shapeBounds(sh);
+    flat.forEach(({ shape }) => {
+      const b = shapeBounds(shape);
       gMinX = Math.min(gMinX, b.minX); gMaxX = Math.max(gMaxX, b.maxX);
       gMinY = Math.min(gMinY, b.minY); gMaxY = Math.max(gMaxY, b.maxY);
     });
     const offX = (gMinX + gMaxX) / 2, offY = (gMinY + gMaxY) / 2;
-    return shapes.map((sh, i) => ({
-      shape: sh,
+    return flat.map((f, i) => ({
+      shape: f.shape,
       offX, offY,
       depth:     hierarchy[i].depth,      // 0=exterior, 1=hueco, 2=isla…
       parentIdx: hierarchy[i].parentIdx,  // índice del shape contenedor
-      layer:     sh.userData?.layer || '0',
-      color:     normalizeHex(sh.userData?.color), // null si no hay color explícito
+      layer:     f.layer || '0',
+      color:     normalizeHex(f.color), // null si no hay color explícito
+      elementId: f.elementId || null,
     }));
   }
   // computeHierarchy es puramente geométrica (point-in-polygon sobre shapes
@@ -1895,6 +1905,7 @@ const SVGVisibleGeometry = (() => {
   const SCALE = 10000;
   const CLEAN_DIST = 2;
   const MIN_AREA = 0.00001;
+  const COVER_TOLERANCE = 0.04; // mm: elimina paredes residuales por curvas casi coincidentes
   let warnedMissingClipper = false;
 
   function stripClosingPoint(points) {
@@ -1967,6 +1978,66 @@ const SVGVisibleGeometry = (() => {
     return ok ? cleanPaths(solution, lib) : [];
   }
 
+  function pathParentHierarchy(paths, lib) {
+    const items = paths.map((path, i) => ({
+      path,
+      area: pathArea(path, lib),
+      parentIdx: -1,
+      depth: 0,
+      index: i,
+    }));
+    const order = items.map((_, i) => i).sort((a, b) => items[b].area - items[a].area);
+
+    for (let oi = 0; oi < order.length; oi++) {
+      const idx = order[oi];
+      const item = items[idx];
+      const probe = item.path[0];
+      let bestParent = -1;
+      let bestArea = Infinity;
+
+      for (let oj = 0; oj < oi; oj++) {
+        const parentIdx = order[oj];
+        const parent = items[parentIdx];
+        if (parent.area <= item.area) continue;
+        const inside = lib.Clipper.PointInPolygon(probe, parent.path) !== 0;
+        if (inside && parent.area < bestArea) {
+          bestParent = parentIdx;
+          bestArea = parent.area;
+        }
+      }
+      item.parentIdx = bestParent;
+    }
+
+    function depth(idx) {
+      const item = items[idx];
+      if (item._depth != null) return item._depth;
+      item._depth = item.parentIdx === -1 ? 0 : depth(item.parentIdx) + 1;
+      return item._depth;
+    }
+    items.forEach((_, i) => { items[i].depth = depth(i); });
+    return items;
+  }
+
+  function visibleElementId(baseElementId, hierarchy, idx) {
+    const base = String(baseElementId || '').trim();
+    if (!base) return null;
+    const item = hierarchy[idx];
+    const componentRoot = (item.depth % 2 === 1 && item.parentIdx !== -1)
+      ? item.parentIdx
+      : idx;
+    return `${base}:part:${componentRoot}`;
+  }
+
+  function offsetPaths(paths, lib, deltaMM) {
+    const subject = cleanPaths(paths, lib);
+    if (!subject.length || Math.abs(deltaMM) < 1e-9) return subject;
+    const offset = new lib.ClipperOffset(2, Math.max(1, Math.round(Math.abs(deltaMM) * SCALE / 4)));
+    offset.AddPaths(subject, lib.JoinType.jtRound, lib.EndType.etClosedPolygon);
+    const solution = new lib.Paths();
+    offset.Execute(solution, deltaMM * SCALE);
+    return cleanPaths(solution, lib);
+  }
+
   function fallback(items) {
     const out = [];
     items.forEach(item => {
@@ -1985,11 +2056,11 @@ const SVGVisibleGeometry = (() => {
     return out;
   }
 
-  function resolve(items) {
+  function resolve(items, opts = {}) {
     const lib = globalThis.ClipperLib;
     if (!lib?.Clipper || !lib?.ClipType || !lib?.PolyFillType) {
       if (!warnedMissingClipper) {
-        console.warn('ClipperLib no esta disponible; SVG se importa sin resolver solapes visuales.');
+        console.warn('ClipperLib no esta disponible; SVG/DXF se importa sin resolver solapes visuales.');
         warnedMissingClipper = true;
       }
       return fallback(items);
@@ -1997,21 +2068,26 @@ const SVGVisibleGeometry = (() => {
 
     const visibleByPaintIndex = new Array(items.length).fill(null).map(() => []);
     let coveredAbove = [];
+    const coverTolerance = Number.isFinite(+opts.coverTolerance) ? +opts.coverTolerance : COVER_TOLERANCE;
 
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
       const painted = cleanPaths(item.rings.map(toClipperPath).filter(Boolean), lib);
       if (!painted.length) continue;
+      const coverage = (coverTolerance > 0 && coveredAbove.length)
+        ? offsetPaths(coveredAbove, lib, coverTolerance)
+        : coveredAbove;
 
-      const visible = coveredAbove.length
-        ? clipPaths(lib, lib.ClipType.ctDifference, painted, coveredAbove)
+      const visible = coverage.length
+        ? clipPaths(lib, lib.ClipType.ctDifference, painted, coverage)
         : painted;
 
-      visibleByPaintIndex[i] = visible.map(path => ({
+      const hierarchy = pathParentHierarchy(visible, lib);
+      visibleByPaintIndex[i] = visible.map((path, pathIdx) => ({
         shape: shapeFromPoints(fromClipperPath(path)),
         layer: item.layer,
         color: item.color,
-        elementId: item.elementId,
+        elementId: visibleElementId(item.elementId, hierarchy, pathIdx),
       })).filter(entry => entry.shape.curves.length >= 3);
 
       coveredAbove = coveredAbove.length

@@ -602,7 +602,7 @@ medido aparte, la mezcla existente (0.22) ya se ve bien porque no hay
 relighting ni tonemap agresivo de por medio. Sin errores de consola.
 Sintaxis del archivo completo validada con `node --check`.
 
-## 2026-07-25 -- SVG/Corel: resolver solapes visuales antes de extruir
+## 2026-07-25 -- SVG/DXF/Corel: resolver solapes visuales antes de extruir
 
 ### Sintoma observado
 
@@ -611,11 +611,12 @@ y extruir, aparece una pieza mucho mas grande de lo esperado: se extruyen
 zonas de la base negra y quedan paredes finas en limites donde, en CorelDRAW,
 otra pieza coloreada esta perfectamente apilada encima.
 
-El problema tambien se reprodujo importando SVG, asi que no corresponde al
+El problema se reprodujo importando SVG y DXF, asi que no corresponde al
 ultimo fix de absorcion de huecos (`e5bd6f1`) ni es especifico de Electron.
-Es un problema anterior del modelo de importacion: la app interpreta la
-geometria vectorial completa de cada shape, no el resultado visual final
-despues de apilar capas/formas.
+El mismo DXF extruido en Fusion 360 no genera paredes finas, lo cual confirma
+que el archivo fuente es usable y que el problema esta en nuestro modelo de
+importacion: la app interpretaba la geometria vectorial completa de cada
+shape, no el resultado visual final despues de apilar capas/formas.
 
 ### Estado anterior documentado para rollback
 
@@ -625,6 +626,9 @@ Estado vigente antes de esta implementacion:
   `THREE.SVGLoader.createShapes(path)`.
 - Cada shape exterior y cada hole del SVG se aplana como contorno
   independiente en `flat`.
+- `DXFParser.loadText()` generaba sus shapes desde `ENTITIES`, los deduplicaba
+  y pasaba directo a `computeHierarchy(shapes)`, sin resolver areas ocultas por
+  entidades dibujadas encima.
 - Luego `DXFParser.computeHierarchy(flat.map(f => f.shape))` recalcula
   solamente `parentIdx` y `depth` por contencion geometrica.
 - `computeHierarchy` no hace booleanos, no resta formas superiores de formas
@@ -658,23 +662,29 @@ existe en `State.pieces`.
 
 ### Solucion aplicada
 
-Se agrego una etapa de preprocesamiento de SVG antes de `computeHierarchy`:
-resolver la geometria visible por orden de pintado usando booleanos 2D.
+Se agrego una etapa de preprocesamiento antes de `computeHierarchy`: resolver
+la geometria visible por orden de pintado usando booleanos 2D. Empezo para
+SVG/Corel y ahora se aplica tambien al DXF de Corel, porque los fixtures reales
+en `Modelos/Tucan.dxf` preservan un orden de entidades compatible con el
+apilado visual.
 
-Algoritmo aplicado para SVG:
+Algoritmo aplicado para SVG y DXF:
 
-1. Parsear y aplanar los fills en orden de documento/pintado, conservando
-   `layer`, `color` y un `elementId` por operacion de pintado SVG.
+1. Parsear y aplanar los fills/entidades en orden de documento/pintado,
+   conservando `layer`, `color` y un `elementId` por operacion de pintado.
 2. Convertir cada fill a poligono booleano robusto, incluyendo sus holes.
 3. Procesar de arriba hacia abajo manteniendo `coveredAbove`, la union de todo
    lo que ya fue pintado encima.
 4. Para cada shape: `visible = paintedShape - coveredAbove`.
+   `coveredAbove` se expande solo 0.04 mm durante la resta para absorber
+   diferencias submilimetricas entre curvas casi coincidentes, que eran las
+   paredes finas visibles.
 5. Si `visible` queda vacio o menor a un umbral de area, descartarlo.
-6. Si `visible` se divide en varias islas, emitir cada isla como contorno
+6. Si `visible` se divide en varias islas, emitir cada isla como componente
    seleccionable separado.
-7. Si una isla visible tiene holes reales, emitir exterior + holes con un
-   mismo `elementId`/`visiblePartId`, para que la extrusion los trate como una
-   sola pieza con huecos.
+7. Si una isla visible tiene holes reales, emitir exterior + holes con el
+   mismo `elementId:part:N`; una isla desconectada recibe otro `part:N`, para
+   que la extrusion no vuelva a unir regiones separadas por una capa superior.
 8. Recalcular `parentIdx`/`depth` sobre los contornos visibles resultantes y
    continuar con el pipeline actual (`populateShapeData`, seleccion,
    extrusion, historial y exportacion).
@@ -686,40 +696,53 @@ para exportar 3MF, abrir en laminador, guardar proyecto y reextruir.
 Implementacion:
 
 - Nuevo script CDN: `clipper-lib@6.4.2/clipper.js`.
-- Nuevo modulo aislado: `SVGVisibleGeometry`.
+- Nuevo modulo aislado: `SVGVisibleGeometry` (nombre heredado; ahora es el
+  resolver visible compartido por SVG y DXF).
 - `SVGVisibleGeometry.resolve(items)` procesa de arriba hacia abajo,
   mantiene `coveredAbove`, calcula `visible = painted - coveredAbove` y
   devuelve contornos planos en el orden original de pintado.
+- Cada resultado visible calcula una jerarquia local: exteriores y sus holes
+  comparten `elementId:part:N`, pero islas desconectadas reciben otra identidad.
+- `DXFParser.loadText()` transforma cada shape DXF en un paint item, conserva
+  `layer`, `color` y `elementId`, y recien despues recalcula jerarquia sobre
+  los contornos visibles resultantes.
 - Si Clipper no carga, hay fallback al comportamiento anterior: importar los
-  contornos SVG sin resolver solapes visuales, con warning en consola. La app
-  no queda rota por una falla de CDN.
+  contornos SVG/DXF sin resolver solapes visuales, con warning en consola. La
+  app no queda rota por una falla de CDN.
 
 ### Alcance recomendado
 
-Primera implementacion aplicada solo para SVG/Corel, porque SVG conserva mejor el orden
-visual de pintado. DXF no siempre preserva un orden de dibujo confiable, asi
-que para DXF conviene mantener el comportamiento actual hasta confirmar que el
-export de Corel incluye una senal estable de orden/capa.
+Implementacion aplicada a SVG/Corel y DXF/Corel. DXF no siempre preserva un
+orden de dibujo confiable en todos los CAD, pero el fixture real de Corel tiene
+13 `LWPOLYLINE` cerradas con orden/capa/color consistente, y Fusion 360 extruye
+ese mismo DXF sin generar paredes finas.
 
 La implementacion quedo aislada detras de `SVGVisibleGeometry.resolve(items)`,
 para que sea facil desactivarla o revertirla sin tocar la extrusion.
 
 ### Que NO conviene hacer
 
-- No corregir esto con tolerancias o offsets de contornos: esconderia paredes
-  pero cambiaria dimensiones reales.
+- No corregir esto con offsets grandes o manuales durante la extrusion:
+  esconderia paredes pero cambiaria dimensiones reales. La unica tolerancia
+  aceptada aqui es una expansion minima de cobertura en el booleano 2D
+  (`0.04 mm`) para eliminar residuos de curvas casi coincidentes antes de crear
+  `State.contours`.
 - No intentar deducirlo desde el click/seleccion: ahi ya se perdio el orden
   visual y la forma inferior ya entro completa.
 - No hacer booleanos directamente en 3D: es mas caro, mas fragil y llegaria
   tarde. El problema es 2D y debe resolverse antes de crear `State.contours`.
 
-### Verificacion esperada / pendiente con archivos reales
+### Verificacion esperada con archivos reales
 
 - SVG minimo: rectangulo negro abajo + rectangulo naranja encima. Al importar,
   el negro visible debe quedar recortado; extruir naranja no debe generar pared
   negra debajo.
 - SVG tipo tucan: el pico naranja/gris/blanco debe quedar separado segun lo
   visible en Corel; seleccionar una parte debe extruir solo esa region.
+- DXF tipo tucan exportado desde Corel: la base no debe quedar como una region
+  completa escondida debajo del pico, alas, patas y ojo; al seleccionar una
+  cara visible, no deben extruirse paredes finas por debajo de piezas
+  superiores.
 - Letras o formas con holes reales del mismo path deben seguir extruyendo con
   huecos correctos.
 - Formas donde una capa superior divide una inferior en varias islas deben
@@ -740,6 +763,15 @@ para que sea facil desactivarla o revertirla sin tocar la extrusion.
   inferior devuelve exterior + hole + isla interna, y el superior devuelve
   exterior + hole; es la estructura que `computeHierarchy` y `btn-extrude`
   ya manejan como huecos/islas.
+- Prueba con `Modelos/Tucan.dxf`: 13 `LWPOLYLINE` cerradas pasan por el mismo
+  resolver visible. La base, que antes entraba completa con area aproximada
+  `1006.724 mm2`, queda recortada en perfiles visibles; el primer perfil
+  resuelto queda en `431.504 mm2`, lo que confirma que las zonas tapadas por
+  capas superiores ya no llegan intactas al extrusor.
+- En esa misma prueba, la base queda separada en componentes visibles
+  `dxf:0:part:0` y `dxf:0:part:1`; los holes permanecen con el componente
+  exterior correcto, pero la isla desconectada ya no comparte identidad de
+  extrusion automatica con el resto de la base.
 
 ## 2026-07-25 — La barra superior no era responsive (se recortaba en ventanas angostas)
 
