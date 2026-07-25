@@ -6983,6 +6983,7 @@ const PanelUI = (() => {
     const hctx = hue.getContext('2d');
     let h = 0, s = 0, v = 0.78;
     let active = null;
+    let suppressOutsideCloseUntil = 0;
     let originalColors = null;
 
     function hsvToHex(hh, ss, vv) {
@@ -7094,10 +7095,16 @@ const PanelUI = (() => {
       applyLive();
     }
 
+    function suppressOutsideClose(ms = 350) {
+      suppressOutsideCloseUntil = performance.now() + ms;
+    }
+
     function startPick(kind, e) {
       e.preventDefault();
       e.stopPropagation();
       active = kind;
+      try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch (_) {}
+      if (kind === 'hue') suppressOutsideClose();
       if (kind === 'square') pickFromSquare(e);
       else pickFromHue(e);
     }
@@ -7114,11 +7121,16 @@ const PanelUI = (() => {
       // efectivamente" — soltar el slider de gama (hue) solo debe dejar de
       // arrastrar, sin cerrar el popover, para poder recién ahí clickear
       // el cuadrado con la gama ya elegida.
-      if (active === 'square') closePicker(true);
+      if (active === 'square') {
+        closePicker(true);
+      } else if (active === 'hue') {
+        suppressOutsideClose();
+      }
       active = null;
     });
     document.addEventListener('mousedown', e => {
       if (pop.style.display === 'none') return;
+      if (active || performance.now() < suppressOutsideCloseUntil) return;
       if (!pop.contains(e.target)) closePicker(true);
     });
     window.addEventListener('inkora-open-color-popover', () => {
