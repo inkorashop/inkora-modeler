@@ -1795,6 +1795,72 @@ const DXFParser = (() => {
     return items;
   }
 
+  // Umbral de área para confirmar que un hueco desaparecido está realmente
+  // contenido en su contenedor (no solo parcialmente superpuesto).
+  const DXF_HOLE_CONTAINMENT = 0.97;
+
+  function rawDXFPaintItem(sh, i) {
+    return {
+      rings: [sh.getPoints(128).map(p => ({ x: p.x, y: p.y }))],
+      layer: sh.userData?.layer || '0',
+      color: normalizeHex(sh.userData?.color),
+      elementId: `dxf:${i}`,
+    };
+  }
+
+  // SVGVisibleGeometry.resolve() asume que "lo dibujado después tapa a lo
+  // anterior" (orden del archivo = orden de pintado). Eso es correcto para
+  // piezas sólidas independientes que se superponen (ej. un ala dibujada
+  // sobre el cuerpo: el ala sobrevive con su propia área, y el cuerpo
+  // pierde la parte tapada — nunca desaparece del todo). Pero un hueco
+  // real dibujado ANTES que su contorno exterior queda tapado por
+  // completo y desaparece, porque el algoritmo no tiene forma de saber
+  // que ese anillo debía restarse de su padre en vez de ser tapado por
+  // él.
+  //
+  // La corrección es quirúrgica: correr el resolver una vez tal cual (sin
+  // tocar nada), ver qué anillos desaparecieron por completo (área visible
+  // cero) y, SOLO para esos, encontrar su contenedor real (el más chico
+  // que los contiene en ~100% de área, vía Clipper) y agregarlos como
+  // anillo extra de ese contenedor antes de correr el resolver de nuevo.
+  // Ninguna pieza sólida legítima llega a desaparecer del todo con el
+  // algoritmo original (siempre sobrevive con su propia área, aunque sea
+  // chica), así que esto nunca las toca — el ala/pico/patas siguen
+  // exactamente igual que antes de este fix.
+  function buildDXFPaintItems(shapes) {
+    const rawItems = shapes.map((sh, i) => rawDXFPaintItem(sh, i));
+    const dryRun = SVGVisibleGeometry.resolve(rawItems);
+    const survived = new Set(dryRun.map(e => (e.elementId || '').split(':part:')[0]));
+    const vanished = shapes.map((_, i) => !survived.has(`dxf:${i}`));
+
+    if (!vanished.some(Boolean)) return rawItems; // nada desapareció, camino normal sin cambios
+
+    const hierarchy = computeHierarchy(shapes);
+    const container = shapes.map((_, i) => {
+      if (!vanished[i]) return -1;
+      let best = -1, bestArea = Infinity;
+      shapes.forEach((_, j) => {
+        if (j === i || vanished[j]) return; // no anidar dentro de otro hueco desaparecido
+        const frac = SVGVisibleGeometry.overlapFraction(hierarchy[i].pts, hierarchy[j].pts);
+        if (frac >= DXF_HOLE_CONTAINMENT && hierarchy[j].area < bestArea) {
+          best = j; bestArea = hierarchy[j].area;
+        }
+      });
+      return best;
+    });
+
+    const items = [];
+    shapes.forEach((sh, i) => {
+      if (vanished[i]) return; // se agrega como anillo extra de su contenedor, no como item propio
+      const rings = [hierarchy[i].pts];
+      shapes.forEach((_, j) => {
+        if (vanished[j] && container[j] === i) rings.push(hierarchy[j].pts);
+      });
+      items.push({ rings, layer: sh.userData?.layer || '0', color: normalizeHex(sh.userData?.color), elementId: `dxf:${i}` });
+    });
+    return items;
+  }
+
   async function loadFile(file) {
     /* Leer el archivo con encoding latin1 (cubre Windows-1252, usado por
        AutoCAD antiguo). FileReader.readAsText con 'latin1' mapea cada byte
@@ -1829,12 +1895,7 @@ const DXFParser = (() => {
     // Segunda cesion: resolver visibilidad y hierarchy con muchos shapes puede tomar >16ms
     await new Promise(ok => setTimeout(ok, 0));
 
-    const flat = SVGVisibleGeometry.resolve(shapes.map((sh, i) => ({
-      rings: [sh.getPoints(128).map(p => ({ x: p.x, y: p.y }))],
-      layer: sh.userData?.layer || '0',
-      color: normalizeHex(sh.userData?.color),
-      elementId: `dxf:${i}`,
-    })));
+    const flat = SVGVisibleGeometry.resolve(buildDXFPaintItems(shapes));
 
     if (!flat.length) return [];
 
@@ -2117,7 +2178,25 @@ const SVGVisibleGeometry = (() => {
     return visibleByPaintIndex.flat();
   }
 
-  return { resolve, shapeFromPoints };
+  // Fracción del área de `childPts` que queda contenida dentro de `parentPts`
+  // (0..1), vía intersección booleana real con Clipper -- no un solo punto
+  // de prueba. Usado por DXFParser para encontrar, dado un anillo que
+  // desapareció por completo al resolver (ver buildDXFPaintItems), cuál es
+  // su contenedor real. Sin ClipperLib disponible devuelve 0 (conservador).
+  function overlapFraction(childPts, parentPts) {
+    const lib = globalThis.ClipperLib;
+    if (!lib?.Clipper || !lib?.ClipType) return 0;
+    const child = toClipperPath(childPts);
+    const parent = toClipperPath(parentPts);
+    if (!child || !parent) return 0;
+    const childArea = pathArea(child, lib);
+    if (childArea <= 0) return 0;
+    const inter = clipPaths(lib, lib.ClipType.ctIntersection, [child], [parent]);
+    const interArea = inter.reduce((sum, p) => sum + pathArea(p, lib), 0);
+    return interArea / childArea;
+  }
+
+  return { resolve, shapeFromPoints, overlapFraction };
 })();
 
 

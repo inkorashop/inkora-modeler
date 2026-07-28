@@ -841,3 +841,102 @@ Verificacion realizada:
 - Sintaxis de scripts inline del HTML validada con `vm.Script`.
 - `node --check electron/main.js` y `node --check electron/preload.js`.
 - `npm.cmd pkg get version` en `electron/` devuelve `1.0.2`.
+
+## 2026-07-25 (seguimiento del fix de solapes) — El DXF perdía huecos reales (pupila del ojo, agujero del llavero)
+
+### Síntoma
+
+Con el fix de solapes visuales (`9069da5`) ya funcionando para las paredes
+finas, quedó un problema distinto: al importar `Modelos/Tucan.dxf`, dos
+huecos reales del diseño (la pupila del ojo y el agujero del aro del
+llavero) no aparecían — ni en el import 2D ni al extruir. El mismo diseño
+exportado a SVG (`Modelos/Tucan.svg`) sí los traía bien.
+
+### Dos intentos descartados antes de encontrar la causa real
+
+1. **Agrupar por contención geométrica antes del resolver** (un punto de
+   prueba: "¿este contorno cae adentro de otro?"). Rompió la extrusión:
+   el ala/pico quedaron cortados como si fueran huecos del cuerpo. Un
+   punto de prueba no distingue "hueco real" de "pieza sólida separada
+   que se superpone".
+2. **Lo mismo pero verificando el área real de superposición con Clipper**
+   (no un punto, el % de área contenida). También rompió — midiendo la
+   superposición real se confirmó que el cuerpo contiene ~100% del área
+   de *todas* las demás piezas (ala, pico, patas), no solo de los huecos
+   reales. Causa: la pieza de "cuerpo" en este diseño es la fusión de
+   *todas* las piezas del llavero puesta como fondo — geométricamente es
+   indistinguible de un hueco genuino con 100% de contención. La
+   geometría sola no alcanza para esta distinción.
+
+### Causa raíz real
+
+`SVGVisibleGeometry.resolve()` asume que el orden del archivo es el orden
+de pintado ("lo de después tapa a lo de antes"). Correcto para piezas
+sólidas independientes que se superponen: cuando el ala se dibuja después
+del cuerpo, el ala sobrevive con su propia área y el cuerpo pierde solo la
+parte tapada — el ala nunca desaparece del todo. Pero el agujero del
+llavero está dibujado en Corel **antes** que su aro exterior. Como el
+resolver no sabe que ese anillo es un hueco intencional, cuando llega el
+turno de procesar el aro (dibujado después = "tapa" según el algoritmo),
+el agujero queda cubierto por completo y su área visible cae a cero — se
+pierde sin dejar rastro, y el aro se resuelve como disco sólido en vez de
+como anillo.
+
+Confirmado extrayendo las 13 `LWPOLYLINE` del DXF directamente (no con
+`grep`, con un parser real de codigo+valor) y midiendo con Clipper cuánto
+del área de cada una queda contenida en las demás: la pupila (1.34×1.39mm)
+y el agujero del llavero (4×4mm, dentro del aro de 8×7.65mm) son,
+confirmado empíricamente, las **únicas** dos piezas cuya área visible cae
+a cero al correr el resolver original — ninguna pieza sólida legítima
+(ala, pico, patas) llega nunca a cero, porque todas están dibujadas
+*después* de la pieza de fondo, nunca antes.
+
+### Solución: usar "¿desaparece del todo?" como señal, no la geometría sola
+
+`DXFParser.buildDXFPaintItems(shapes)`:
+
+1. Arma los paint items originales (un anillo por entidad, sin agrupar) y
+   corre `SVGVisibleGeometry.resolve()` una vez tal cual — un "dry run".
+2. Compara los `elementId` base de la salida contra los de entrada: toda
+   entidad cuyo `elementId` no sobrevive con ningún resultado quedó con
+   área visible cero ("desapareció").
+3. **Solo** para esas entidades desaparecidas, busca su contenedor real
+   (el más chico que la contiene en ≥97% de área, vía
+   `SVGVisibleGeometry.overlapFraction`, nueva función expuesta que mide
+   intersección real con Clipper en vez de un punto de prueba) y la
+   agrega como anillo extra de ese contenedor.
+4. Vuelve a armar los paint items con esa corrección puntual y corre
+   `resolve()` de nuevo — recién ahí se usa el resultado final.
+
+Ninguna pieza que sobrevive el `resolve()` original se toca: el ala, el
+pico y las patas pasan exactamente por el mismo camino que antes de este
+fix. Solo se corrigen las entidades que el algoritmo original pierde por
+completo — que es justamente el síntoma reportado, ni más ni menos.
+
+### Por qué no unificar SVG y DXF convirtiendo uno al otro
+
+Se evaluó la idea de tratar SVG como formato interno único y convertir
+DXF a SVG antes de importar. Se descartó: para emitir un SVG-con-huecos
+válido desde el DXF, igual hace falta primero determinar qué polilínea es
+hueco de cuál — exactamente el mismo trabajo geométrico que este fix ya
+hace. Convertir no ahorra nada, solo reubica el problema y agrega una
+capa de serialización/re-parseo de más.
+
+### Verificación
+
+Con Chrome DevTools MCP, importando `Modelos/Tucan.dxf` (subido con
+`upload_file`, no simulado):
+
+| | Antes del fix | Después del fix |
+|---|---|---|
+| Contornos totales | 13 | 16 |
+| Pupila del ojo (~1.3×1.3mm) | ausente | presente, hueco de la pieza del ojo |
+| Agujero del llavero (4×4mm) | ausente (aro sólido) | presente, hueco del aro (8×7.65mm) |
+| Color del ala/pico/patas | preservado | preservado, sin cambios |
+| Extrusión "Objetos separados" | silueta completa, sin fragmentar | silueta completa, sin fragmentar |
+| Extrusión "Objeto unido" | silueta completa | silueta completa |
+
+Sin errores de consola en ningún caso. Sintaxis del archivo completo
+validada con `node --check`. El caso SVG no se tocó (ningún cambio en
+`SVGParser` ni en `SVGVisibleGeometry.resolve()`, solo se le agregó la
+función `overlapFraction`, aditiva).

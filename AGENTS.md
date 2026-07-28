@@ -19,3 +19,8 @@ Reglas especificas:
 - Cuidar precision geometrica, exportaciones y comportamiento visual.
 - No tocar otros proyectos de INKORA desde este repo.
 - No subir configuraciones locales ni secretos.
+- Despues de terminar y validar un cambio, hacer commit + push a `main`.
+  El proyecto de Vercel (`inkora-modeler`) esta conectado por Git desde
+  el 2026-07-25 (ver DECISIONS.md) y despliega solo en cada push -- no
+  hace falta correr `vercel --prod` a mano, pero el push si es un paso
+  obligatorio, no opcional. No dejar cambios validados sin commitear.
