@@ -1054,3 +1054,100 @@ pupila idx8) paso a paso:
 
 Sin errores de consola nuevos en ningún caso. Sintaxis del archivo
 completo validada con `node --check`.
+
+## 2026-07-28 — Doble contorno al hacer zoom en piezas anidadas (DXF): causa raíz real y fix definitivo
+
+**Síntoma reportado:** haciendo zoom en el visor 2D (sin extruir nada
+todavía) sobre piezas anidadas del Tucan (anillo del ojo, pupila), cada
+contorno se veía duplicado: dos líneas casi superpuestas pero con un
+radio claramente distinto (gap visible de ~1.8mm en el caso del ojo).
+
+**Investigación descartada primero (importante para no repetir el
+error):** el usuario insistió, con razón, en que esto NO estaba en el
+diseño original de CorelDRAW — llevó los mismos DXF/SVG exportados de
+vuelta a Corel y confirmó con Tab/eliminar que cada círculo visible es un
+único objeto, sin nada más encima ni cerca. La hipótesis inicial ("son
+dos objetos de Corel genuinamente superpuestos") era incorrecta.
+
+**Causa raíz real, encontrada en dos capas:**
+
+1. `DXFParser.dedupeShapes` (ya existía) tenía como clave de
+   deduplicación `layer + color`. Corel exportó el mismo trazo del
+   anillo del ojo DOS VECES como entidades DXF distintas (handles `63` y
+   `6A`, 33 vértices idénticos, distancia máxima 0.000000mm probando
+   todas las rotaciones/sentidos) pero con colores distintos (blanco y
+   naranja) — un artefacto del propio exportador de Corel, no del
+   diseño. Como la clave incluía color, ese par nunca se reconocía como
+   duplicado y ambas copias quedaban dibujadas. Fix: la clave ya no
+   incluye color (sí sigue incluyendo layer); si hay colores distintos
+   para el mismo trazo, gana el color que aparece más tarde en el
+   archivo (mismo criterio de "lo de después es más autoritativo" que ya
+   usa el resto del pipeline). Se aplicó el mismo dedup a `SVGParser`
+   (reutilizando `DXFParser.dedupeShapes`), que no tenía ninguno.
+
+2. Con la geometría ya deduplicada, `DXFParser.buildDXFPaintItems` (el
+   fix de la entrada del 2026-07-25 para recuperar huecos reales como la
+   pupila) seguía produciendo un doble contorno, ahora por una causa
+   distinta: cuando una pieza más chica (el anillo del ojo, ya
+   deduplicado) queda ANTES en el archivo que una pieza más grande que
+   la contiene geométricamente (la cabeza), esa pieza grande la tapa por
+   completo en el resolver original y "desaparece". El fix de esa fecha
+   trataba TODA pieza desaparecida como un hueco: la recortaba como
+   anillo extra del contenedor y la descartaba como ítem propio. Eso es
+   correcto para un hueco real (nada debajo, debe quedar transparente),
+   pero el anillo del ojo NO es un hueco — es una pieza sólida naranja
+   que solo quedó mal ordenada. Al descartarla, quedaba un hueco vacío
+   exactamente donde antes estaba, y ese hueco dejaba asomar el contorno
+   de la pieza de fondo (el cuerpo fusionado) con el MISMO trazo que el
+   borde recién cortado — de ahí el doble contorno con gap visible.
+
+   (Se probaron dos variantes intermedias antes de llegar al fix final,
+   documentadas acá para no repetirlas: (a) mantener la pieza desaparecida
+   como ítem propio ADEMÁS del hueco cortado — duplica la misma curva dos
+   veces, mismo síntoma. (b) aplicar esa misma lógica a TODAS las piezas
+   desaparecidas sin distinción — hace que huecos reales como la pupila y
+   el agujero del llavero dejen de ser transparentes y se conviertan en
+   discos sólidos propios, tapando el hueco real que el fix del
+   2026-07-25 había recuperado.)
+
+**Fix final:** distinguir geométricamente dos casos entre las piezas que
+desaparecen bajo el resolver original (color no sirve como señal: BYLAYER
+hace que piezas sin color propio —cuerpo, agujero del llavero— hereden el
+mismo color de capa que piezas con relleno real):
+
+- **Hueco simple** (no contiene ninguna otra forma adentro, ej. pupila,
+  agujero del llavero): se recorta como anillo extra de **todos** los
+  contenedores válidos que lo contienen (no solo el más chico/directo —
+  si no, una pieza compuesta más grande que también lo contiene le asoma
+  un resto sólido propio justo en el hueco), y no se conserva como ítem
+  visible propio. Mismo comportamiento que el fix del 2026-07-25.
+- **Pieza compuesta** (contiene otra forma dibujada adentro, ej. el
+  anillo del ojo, que tiene el anillo interior y la pupila dentro): se
+  reubica justo después de su contenedor real en el orden de pintado, sin
+  duplicar su geometría. El resolver, con el nuevo orden, resta su área
+  del contenedor exactamente igual que ya hace con ala/pico/patas al
+  superponerse al cuerpo — no hace falta ningún caso especial ni anillo
+  extra.
+
+**Verificación** (Chrome DevTools MCP, importando `Modelos/Tucan.dxf` y
+`Modelos/Tucan.svg` por el botón real de la UI, no datos simulados):
+
+- Zoom extremo sobre el borde compartido cabeza/anillo del ojo: ya no hay
+  gap con dos círculos de radio distinto — solo el trazo fino coincidente
+  esperable entre dos piezas adyacentes (comparado contra el pico, una
+  pieza aislada que nunca pasó por este mecanismo: ahí se ve una sola
+  línea limpia, confirmando que el trazo fino coincidente es
+  comportamiento normal de bordes compartidos, no el bug).
+- Extrusión 3D: el anillo del ojo se extruye sólido con su propio color y
+  el hueco del anillo interior bien cortado (`_holeIdxs` correcto); la
+  pupila y el agujero del llavero se extruyen como huecos reales
+  (transparentes, se ve el fondo del visor a través — confirmado por
+  captura), no como discos sólidos.
+- Ala/pico/patas (piezas que nunca "desaparecen" bajo el resolver
+  original): sin cambios, un solo trazo limpio.
+- Import SVG: mismo resultado limpio sin tocar `SVGParser` más allá del
+  dedup ya aplicado — el orden de un SVG ya refleja el z-order real, así
+  que el anillo del ojo nunca llega a "desaparecer" ahí.
+- Sintaxis del archivo completo validada con `node --check` en cada paso.
+- Instrumentación de debug temporal (`window.__DXF_DEBUG__`) usada
+  durante la investigación, retirada antes de este commit.

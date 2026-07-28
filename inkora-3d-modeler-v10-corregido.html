@@ -1675,19 +1675,33 @@ const DXFParser = (() => {
     return best || '';
   }
 
+  // La clave de dedup NO incluye color a propósito (a diferencia de antes,
+  // que usaba metaKey = layer+color). Corel puede exportar el MISMO trazo
+  // dos veces con distinto color -- confirmado con un caso real: dos
+  // LWPOLYLINE con handles distintos, mismos 33 vértices, distancia máxima
+  // entre ellos (probando todas las rotaciones y sentidos posibles del
+  // trazo cerrado) de 0.000000mm. Si la clave incluye color, ese par nunca
+  // se reconoce como duplicado y ambos quedan dibujados superpuestos —
+  // exactamente el "doble contorno" reportado. Layer sí se mantiene en la
+  // clave (más conservador: no asumir que capas distintas son siempre el
+  // mismo contorno, aunque en la práctica no hacía falta para este caso).
   function dedupeShapes(shapes) {
     const seen = new Map();
     const out = [];
     shapes.forEach(sh => {
-      const key = `${metaKey(sh.userData || {})}|${normalizedPointKey(sh.getPoints(96))}`;
+      const layer = sh.userData?.layer || '0';
+      const key = `${layer}|${normalizedPointKey(sh.getPoints(96))}`;
       if (!key) return;
       if (!seen.has(key)) {
         seen.set(key, sh);
         out.push(sh);
         return;
       }
+      // El duplicado que aparece MÁS TARDE en el archivo se queda con el
+      // color -- mismo criterio de "lo de después es más autoritativo" que
+      // ya usa el resto del pipeline (orden de pintado en SVGVisibleGeometry).
       const kept = seen.get(key);
-      if (!kept.userData?.color && sh.userData?.color) {
+      if (sh.userData?.color) {
         kept.userData.color = sh.userData.color;
         kept.userData.layer = sh.userData.layer || kept.userData.layer;
       }
@@ -1812,21 +1826,34 @@ const DXFParser = (() => {
   // anterior" (orden del archivo = orden de pintado). Eso es correcto para
   // piezas sólidas independientes que se superponen (ej. un ala dibujada
   // sobre el cuerpo: el ala sobrevive con su propia área, y el cuerpo
-  // pierde la parte tapada — nunca desaparece del todo). Pero un hueco
-  // real dibujado ANTES que su contorno exterior queda tapado por
-  // completo y desaparece, porque el algoritmo no tiene forma de saber
-  // que ese anillo debía restarse de su padre en vez de ser tapado por
-  // él.
+  // pierde la parte tapada — nunca desaparece del todo). Pero cuando una
+  // pieza más chica queda ANTES en el archivo que una pieza más grande que
+  // geométricamente la contiene, esta última la tapa por completo y
+  // desaparece. Hay dos casos bien distintos ahí:
   //
-  // La corrección es quirúrgica: correr el resolver una vez tal cual (sin
-  // tocar nada), ver qué anillos desaparecieron por completo (área visible
-  // cero) y, SOLO para esos, encontrar su contenedor real (el más chico
-  // que los contiene en ~100% de área, vía Clipper) y agregarlos como
-  // anillo extra de ese contenedor antes de correr el resolver de nuevo.
-  // Ninguna pieza sólida legítima llega a desaparecer del todo con el
-  // algoritmo original (siempre sobrevive con su propia área, aunque sea
-  // chica), así que esto nunca las toca — el ala/pico/patas siguen
-  // exactamente igual que antes de este fix.
+  //  1) Hueco real, sin nada dibujado dentro (ej. la pupila, el agujero
+  //     del llavero): no es una pieza propia, es un vacío. Se recorta como
+  //     anillo extra de su contenedor (para que quede como agujero real al
+  //     extruir) y NO se conserva como ítem visible propio.
+  //  2) Pieza compuesta, con OTRA forma dibujada dentro suyo (ej. el
+  //     anillo naranja del ojo, que tiene el anillo interior y la pupila
+  //     dibujados adentro): no es un hueco, es una pieza sólida que solo
+  //     quedó mal ordenada en el archivo. Si se la tratara igual que el
+  //     caso 1 (agujero extra + descartarla), su color desaparece del
+  //     todo y queda un vacío donde debería verse su relleno — y ese
+  //     vacío deja asomar el contorno de la pieza de fondo con el mismo
+  //     trazo que el borde del agujero recién cortado: el "doble
+  //     contorno" reportado. La corrección es reubicarla justo después de
+  //     su contenedor en el orden de pintado, sin duplicar su geometría:
+  //     el resolver resta su área del contenedor exactamente igual que ya
+  //     hace con ala/pico/patas sobre el cuerpo.
+  //
+  // Distinguir un caso del otro es geométrico, no por color (BYLAYER hace
+  // que piezas sin color propio -- cuerpo, agujero del llavero -- hereden
+  // el mismo color de capa que piezas con relleno real, así que el color
+  // solo no alcanza): si la pieza desaparecida contiene a su vez otra
+  // forma (huella ≥97% con Clipper), es compuesta; si no contiene nada,
+  // es un hueco simple.
   function buildDXFPaintItems(shapes) {
     const rawItems = shapes.map((sh, i) => rawDXFPaintItem(sh, i));
     const dryRun = SVGVisibleGeometry.resolve(rawItems);
@@ -1840,7 +1867,7 @@ const DXFParser = (() => {
       if (!vanished[i]) return -1;
       let best = -1, bestArea = Infinity;
       shapes.forEach((_, j) => {
-        if (j === i || vanished[j]) return; // no anidar dentro de otro hueco desaparecido
+        if (j === i) return;
         const frac = SVGVisibleGeometry.overlapFraction(hierarchy[i].pts, hierarchy[j].pts);
         if (frac >= DXF_HOLE_CONTAINMENT && hierarchy[j].area < bestArea) {
           best = j; bestArea = hierarchy[j].area;
@@ -1849,16 +1876,34 @@ const DXFParser = (() => {
       return best;
     });
 
-    const items = [];
-    shapes.forEach((sh, i) => {
-      if (vanished[i]) return; // se agrega como anillo extra de su contenedor, no como item propio
+    const isComposite = shapes.map((_, i) => vanished[i] && shapes.some((_, j) =>
+      j !== i && SVGVisibleGeometry.overlapFraction(hierarchy[j].pts, hierarchy[i].pts) >= DXF_HOLE_CONTAINMENT
+    ));
+
+    // Huecos simples: fuera del orden de pintado (se agregan como anillo
+    // extra del contenedor más abajo). Piezas compuestas: reubicadas justo
+    // después de su contenedor real, sin duplicar geometría.
+    let order = shapes.map((_, i) => i).filter(i => !vanished[i] || isComposite[i]);
+    shapes.forEach((_, i) => {
+      if (!vanished[i] || !isComposite[i]) return;
+      order.splice(order.indexOf(container[i]) + 1, 0, i);
+    });
+
+    return order.map(i => {
       const rings = [hierarchy[i].pts];
       shapes.forEach((_, j) => {
-        if (vanished[j] && container[j] === i) rings.push(hierarchy[j].pts);
+        if (!vanished[j] || isComposite[j]) return;
+        // Cortar el hueco simple en TODO contenedor válido que lo contenga
+        // (no solo el más chico/directo): si una pieza compuesta más grande
+        // (ej. el anillo del ojo) también lo contiene, sin este corte le
+        // asoma un resto sólido propio justo en el hueco -- el mismo hueco
+        // recuperado quedaría tapado de nuevo, aunque sea parcialmente.
+        if (SVGVisibleGeometry.overlapFraction(hierarchy[j].pts, hierarchy[i].pts) >= DXF_HOLE_CONTAINMENT) {
+          rings.push(hierarchy[j].pts);
+        }
       });
-      items.push({ rings, layer: sh.userData?.layer || '0', color: normalizeHex(sh.userData?.color), elementId: `dxf:${i}` });
+      return { rings, layer: shapes[i].userData?.layer || '0', color: normalizeHex(shapes[i].userData?.color), elementId: `dxf:${i}` };
     });
-    return items;
   }
 
   async function loadFile(file) {
@@ -1920,7 +1965,7 @@ const DXFParser = (() => {
   // computeHierarchy es puramente geométrica (point-in-polygon sobre shapes
   // ya construidos) — no depende de nada específico de DXF. Se expone para
   // que SVGParser la reutilice en vez de reimplementar detección de huecos.
-  return {loadFile, loadText, computeHierarchy};
+  return {loadFile, loadText, computeHierarchy, dedupeShapes};
 })();
 
 /* ══════════════════════════════════════════════════════
@@ -2280,9 +2325,23 @@ const SVGParser = (() => {
       if (item.rings.length) paintItems.push(item);
     });
 
-    const flat = SVGVisibleGeometry.resolve(paintItems);
+    let flat = SVGVisibleGeometry.resolve(paintItems);
 
     if (!flat.length) return [];
+
+    // Corel puede exportar el mismo trazo dos veces (distinto <path>, mismo
+    // contorno geométrico) con distinto color -- mismo caso confirmado en
+    // DXF, ver DXFParser.dedupeShapes. Se reusa esa función en vez de
+    // reimplementar la comparación de geometría: se le "presta" el shape
+    // resuelto con layer/color en userData (formato que ya espera), y se
+    // reconstruye el resto de los datos (elementId, etc.) para los que
+    // sobreviven.
+    flat.forEach(f => { f.shape.userData = { layer: f.layer, color: f.color }; });
+    const flatByShape = new Map(flat.map(f => [f.shape, f]));
+    flat = DXFParser.dedupeShapes(flat.map(f => f.shape)).map(sh => {
+      const orig = flatByShape.get(sh);
+      return { shape: sh, layer: sh.userData.layer, color: sh.userData.color, elementId: orig.elementId };
+    });
 
     await new Promise(ok => setTimeout(ok, 0));
 
