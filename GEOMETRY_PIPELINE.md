@@ -376,3 +376,75 @@ se limita a seis decimales para coincidir con la cuantizacion del XML y debe
 ser mayor que cero cuando el switch esta activo. Descarga y apertura en
 laminador consumen el mismo valor validado. Apagar el switch mantiene
 `clearanceMm: 0` y, por contrato, evita por completo la contraccion.
+
+## 12. Hueco local frente a vacio global
+
+Desde `v1.0.9`, un contorno de profundidad impar no se considera por si solo
+un agujero real del modelo. En un diseño por capas puede ser solo el recorte
+local que permite ver otra pieza. La clasificacion canonica es:
+
+```text
+objetos pintados con sus anillos
+  -> union booleana de ocupacion global
+  -> jerarquia de anillos de la union
+  -> anillos impares = regiones sin material
+```
+
+El fondo de Corel, su color y la transparencia del viewport no participan.
+Una region es vacio solo si ninguna pieza la ocupa.
+
+### Responsabilidades separadas
+
+- `SVGVisibleGeometry.resolve()` produce la particion visible y conserva el
+  orden de capas.
+- `applyMaterialVoids()` calcula ocupacion global y etiqueta vacios.
+- `computeHierarchy()` organiza contornos para picking y extrusion, pero no
+  decide por si sola si hay material.
+- `absorbChildren()` convierte un vacio etiquetado en un hole de la malla.
+
+No volver a fusionar estas responsabilidades. En geometria solapada, una
+jerarquia basada en un punto representativo puede ser util para navegacion,
+pero no prueba ausencia global de material.
+
+### Contrato SVG
+
+Los items derivados de cada elemento SVG conservan sus subtrazados y fill
+semantics. Son la entrada directa a la union global. El resultado puede:
+
+- marcar un contorno original equivalente;
+- crear un contorno sintetico cuando varias piezas delimitan el vacio;
+- descartar la clasificacion si otra pieza cubre esa region.
+
+Un contorno sintetico solo se descarta como residuo numerico si no existe una
+entidad equivalente y su ancho efectivo es menor o igual a `0.01 mm`. Un
+agujero explicito no se filtra por tamaño.
+
+### Contrato DXF
+
+DXF no conserva `fill-rule`, fondo ni grupos de subtrazados. La inferencia
+para exportaciones de Corel agrupa unicamente entidades consecutivas con el
+mismo layer/color y contencion Clipper mayor o igual a `99.9%`. Cada raiz
+disjunta conserva su propio objeto de material.
+
+Esta reconstruccion alimenta solo `applyMaterialVoids()`. La salida visible
+sigue viniendo de `buildDXFPaintItems()`. Si un DXF ajeno a Corel necesita
+semantica inequívoca de relleno, debe preferirse SVG o incorporar HATCH/loops
+explicitos en una futura extension del parser.
+
+### Estado e interaccion
+
+Los campos `_isVoid`, `_voidKind`, `_voidArea` y `_syntheticVoid` forman parte
+del snapshot. Mientras el vacio no tenga una pieza propia:
+
+- `Utils.isVisibleContour()` devuelve false para picking y lista;
+- el flat mesh se oculta y el outline se conserva;
+- seleccionar todos, rango, marquee y tecla de extrusion lo ignoran;
+- la extrusion del padre lo absorbe siempre como hole.
+
+La regresion debe exigir, en SVG y DXF:
+
+1. exactamente un vacio real en el Tucan;
+2. ningun contorno sintetico duplicado para ese agujero;
+3. cero vacios visibles, listados, seleccionados o extruidos como pieza;
+4. exactamente un vacio incluido en `_holeIdxs`;
+5. mallas manifold y laminado real correcto en Bambu Studio.

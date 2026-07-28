@@ -77,7 +77,80 @@ async function collectMetrics(win) {
         netArea: signedAreas.reduce((sum, area) => sum + area, 0),
         minArea: areas.length ? Math.min(...areas) : 0,
         oddDepthCount: items.filter(item => item.depth % 2 === 1).length,
+        voidCount: items.filter(item => item.isVoid).length,
+        voidAreas: items.filter(item => item.isVoid).map(item => rounded(item.voidArea)),
+        syntheticVoidCount: items.filter(item => item.syntheticVoid).length,
         colorCount: new Set(items.map(item => item.color).filter(Boolean)).size,
+      };
+    }
+
+    function materialVoidSummary(items) {
+      return {
+        voidCount: items.filter(item => item.isVoid).length,
+        syntheticVoidCount: items.filter(item => item.syntheticVoid).length,
+        voidKinds: items.filter(item => item.isVoid).map(item => item.voidKind),
+      };
+    }
+
+    function dxfPolyline(points, color) {
+      const tokens = [
+        '0', 'LWPOLYLINE',
+        '8', 'Test',
+        '62', String(color),
+        '90', String(points.length),
+        '70', '1',
+      ];
+      points.forEach(point => {
+        tokens.push('10', String(point[0]), '20', String(point[1]));
+      });
+      return tokens;
+    }
+
+    function dxfDocument(polylines) {
+      return [
+        '0', 'SECTION',
+        '2', 'ENTITIES',
+        ...polylines.flatMap(polyline =>
+          dxfPolyline(polyline.points, polyline.color)
+        ),
+        '0', 'ENDSEC',
+        '0', 'EOF',
+      ].join('\\n');
+    }
+
+    async function testMaterialVoidDetection() {
+      const svgStart = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">';
+      const svgDonutPath =
+        '<path fill="#000000" fill-rule="evenodd" ' +
+        'd="M0 0H20V20H0Z M5 5H15V15H5Z"/>';
+      const svgDonut = svgStart + svgDonutPath + '</svg>';
+      const svgFilled = svgStart + svgDonutPath +
+        '<rect x="5" y="5" width="10" height="10" fill="#ff0000"/>' +
+        '</svg>';
+      const svgFrame = svgStart +
+        '<rect x="0" y="0" width="20" height="5" fill="#000000"/>' +
+        '<rect x="0" y="15" width="20" height="5" fill="#000000"/>' +
+        '<rect x="0" y="5" width="5" height="10" fill="#000000"/>' +
+        '<rect x="15" y="5" width="5" height="10" fill="#000000"/>' +
+        '</svg>';
+      const outer = [[0, 0], [20, 0], [20, 20], [0, 20]];
+      const inner = [[5, 5], [15, 5], [15, 15], [5, 15]];
+      const dxfDonut = dxfDocument([
+        { points: outer, color: 1 },
+        { points: inner, color: 1 },
+      ]);
+      const dxfFilled = dxfDocument([
+        { points: outer, color: 1 },
+        { points: inner, color: 1 },
+        { points: inner, color: 2 },
+      ]);
+
+      return {
+        svgExplicit: materialVoidSummary(await SVGParser.loadText(svgDonut)),
+        svgFilled: materialVoidSummary(await SVGParser.loadText(svgFilled)),
+        svgComposite: materialVoidSummary(await SVGParser.loadText(svgFrame)),
+        dxfInferred: materialVoidSummary(await DXFParser.loadText(dxfDonut)),
+        dxfFilled: materialVoidSummary(await DXFParser.loadText(dxfFilled)),
       };
     }
 
@@ -227,6 +300,17 @@ async function collectMetrics(win) {
 
     function flatSignatures() {
       return State.contours.map(contour => meshSignature(contour.flatMesh));
+    }
+
+    function voidStateSignature() {
+      return State.contours
+        .map((contour, index) => contour._isVoid ? {
+          index,
+          kind: contour._voidKind,
+          area: rounded(contour._voidArea),
+          synthetic: !!contour._syntheticVoid,
+        } : null)
+        .filter(Boolean);
     }
 
     function pieceSignature(piece) {
@@ -396,6 +480,7 @@ async function collectMetrics(win) {
       await importThroughFileInput(dxfText, 'tucan-history.dxf');
       await wait(550);
       const initialFlat = flatSignatures();
+      const initialVoids = voidStateSignature();
       const nearBoundary = findNearBoundaryFacePick();
       if (!nearBoundary) throw new Error('No se encontró una cara seleccionable cerca de un contorno.');
 
@@ -406,6 +491,7 @@ async function collectMetrics(win) {
 
       document.getElementById('btn-undo').click();
       const afterUndoFlat = flatSignatures();
+      const afterUndoVoids = voidStateSignature();
       const afterUndoSelectionCoherent = selectionIsCoherent();
       const secondPick = clickContourPoint(
         State.contours[nearBoundary.parentIdx],
@@ -426,6 +512,8 @@ async function collectMetrics(win) {
         secondPick,
         initialFlat,
         afterUndoFlat,
+        initialVoids,
+        afterUndoVoids,
         afterUndoSelectionCoherent,
         firstExtrusion,
         secondExtrusion,
@@ -863,6 +951,20 @@ async function collectMetrics(win) {
       const coincidentBoundaryPairs = countCoincidentBounds(shapeData);
       const extension = parser === SVGParser ? '.svg' : '.dxf';
       await importThroughFileInput(text, name + extension);
+      const voidIndexes = State.contours
+        .map((contour, index) => contour._isVoid ? index : -1)
+        .filter(index => index !== -1);
+      const visibleVoidCount = voidIndexes.filter(index =>
+        Utils.isVisibleContour(State.contours[index])
+      ).length;
+      const panelVoidCount = voidIndexes.filter(index =>
+        Utils.isPanelContour(State.contours[index], index)
+      ).length;
+      PanelUI.selectAll();
+      const selectedVoidCount = voidIndexes.filter(index =>
+        State.selectedIdxs.has(index)
+      ).length;
+      PanelUI.selectNone();
       State.extrudeMode = 'separate';
       State.selectedIdxs.clear();
       State.contours.forEach((contour, index) => {
@@ -903,6 +1005,19 @@ async function collectMetrics(win) {
         contourCount: shapeData.length,
         solidContourCount: shapeData.filter(item => item.depth % 2 === 0).length,
         oddDepthCount: shapeData.filter(item => item.depth % 2 === 1).length,
+        voidCount: voidIndexes.length,
+        syntheticVoidCount: shapeData.filter(item => item.syntheticVoid).length,
+        visibleVoidCount,
+        panelVoidCount,
+        selectedVoidCount,
+        voidPieceCount: State.pieces.filter(piece =>
+          State.contours[piece.contourIdx]?._isVoid
+        ).length,
+        voidHoleCount: State.pieces.reduce(
+          (count, piece) => count + (piece._holeIdxs || [])
+            .filter(index => State.contours[index]?._isVoid).length,
+          0
+        ),
         coincidentBoundaryPairs,
         pieceCount: State.pieces.length,
         invalidMeshes,
@@ -1073,6 +1188,7 @@ async function collectMetrics(win) {
       },
       nearCoincident,
       separateThinFeature,
+      materialVoids: await testMaterialVoidDetection(),
       dxf: summarize(await DXFParser.loadText(dxfText)),
       svg: summarize(await SVGParser.loadText(svgText)),
       dxfFlow: await testFullFlow(DXFParser, dxfText, 'tucan-dxf-test'),
@@ -1261,6 +1377,27 @@ function validate(metrics) {
   if (metrics.separateThinFeature.count !== 2 || metrics.separateThinFeature.bottomBounds === null) {
     failures.push('una forma fina pero separada fue eliminada indebidamente');
   }
+  const materialVoids = metrics.materialVoids;
+  if (materialVoids.svgExplicit.voidCount !== 1 ||
+      materialVoids.svgExplicit.syntheticVoidCount !== 0 ||
+      materialVoids.svgExplicit.voidKinds[0] !== 'svg-material') {
+    failures.push('SVG no reconoce un agujero explicito mediante su geometria de relleno');
+  }
+  if (materialVoids.svgFilled.voidCount !== 0) {
+    failures.push('SVG conserva como hueco una region cubierta por material posterior');
+  }
+  if (materialVoids.svgComposite.voidCount !== 1 ||
+      materialVoids.svgComposite.syntheticVoidCount !== 1) {
+    failures.push('SVG no reconoce un hueco global formado por varias piezas');
+  }
+  if (materialVoids.dxfInferred.voidCount !== 1 ||
+      materialVoids.dxfInferred.syntheticVoidCount !== 0 ||
+      materialVoids.dxfInferred.voidKinds[0] !== 'dxf-inferred') {
+    failures.push('DXF no infiere el agujero de un objeto compuesto de Corel');
+  }
+  if (materialVoids.dxfFilled.voidCount !== 0) {
+    failures.push('DXF conserva como hueco una region cubierta por otra entidad');
+  }
   if (metrics.svg.minArea < 1) {
     failures.push(`SVG conserva un residuo de solo ${metrics.svg.minArea.toFixed(6)} mm2`);
   }
@@ -1268,6 +1405,18 @@ function validate(metrics) {
   if (metrics.svg.colorCount < 4) failures.push(`SVG conserva solo ${metrics.svg.colorCount} colores`);
   for (const format of ['dxf', 'svg']) {
     const flow = metrics[`${format}Flow`];
+    const parsed = metrics[format];
+    if (parsed.voidCount !== 1 || parsed.syntheticVoidCount !== 0 ||
+        flow.voidCount !== 1 || flow.syntheticVoidCount !== 0) {
+      failures.push(`${format.toUpperCase()}: el agujero real del Tucan no se identifica una sola vez`);
+    }
+    if (flow.visibleVoidCount !== 0 || flow.panelVoidCount !== 0 ||
+        flow.selectedVoidCount !== 0 || flow.voidPieceCount !== 0) {
+      failures.push(`${format.toUpperCase()}: un vacio real aparece o se comporta como pieza seleccionable`);
+    }
+    if (flow.voidHoleCount !== 1) {
+      failures.push(`${format.toUpperCase()}: el vacio real no se incorporo a la extrusion como agujero`);
+    }
     if (flow.coincidentBoundaryPairs < 1) failures.push(`${format.toUpperCase()}: no conserva fronteras compartidas exactas`);
     if (flow.pieceCount !== flow.solidContourCount) failures.push(`${format.toUpperCase()}: se extruyeron ${flow.pieceCount} de ${flow.solidContourCount} piezas sólidas`);
     if (flow.invalidMeshes) failures.push(`${format.toUpperCase()}: ${flow.invalidMeshes} mallas inválidas`);
@@ -1407,6 +1556,9 @@ function validate(metrics) {
   const history = metrics.undoRedo;
   if (JSON.stringify(history.initialFlat) !== JSON.stringify(history.afterUndoFlat)) {
     failures.push('UNDO reconstruye objetivos 2D distintos a los importados');
+  }
+  if (JSON.stringify(history.initialVoids) !== JSON.stringify(history.afterUndoVoids)) {
+    failures.push('UNDO pierde o modifica la clasificacion de vacios reales');
   }
   if (!history.afterUndoSelectionCoherent) {
     failures.push('UNDO deja sel2D, selectedIdxs o selectedFaces en desacuerdo');

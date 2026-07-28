@@ -1457,3 +1457,87 @@ La regresion opera el control real, escribe `0,0025` y comprueba que el
 exportador recibe `0.0025`. Tambien conserva las mediciones sinteticas de
 contacto lateral/vertical, la invariancia del proyecto, el contrato manifold
 y el laminado real del Tucan en Bambu Studio. Version HTML/Electron: `1.0.8`.
+
+## 2026-07-28 -- v1.0.9: vacios reales por ocupacion global de material
+
+### Modelo corregido
+
+El color verde mostrado en Corel es solo el fondo de la pagina. No se exporta
+ni se usa para decidir huecos. La distincion correcta es geometrica:
+
+- un hueco local de una pieza puede revelar material de otra capa;
+- un vacio real es una region que queda sin material despues de considerar
+  todas las piezas;
+- la particion visible, la ocupacion global y la topologia de extrusion son
+  preguntas relacionadas, pero no equivalentes.
+
+El error anterior provenia de usar la jerarquia visual local para responder
+las tres preguntas. En diseños solapados, un punto de muestra tambien puede
+asignar una profundidad engañosa aunque las curvas sean validas.
+
+### Solucion comun
+
+`SVGVisibleGeometry.applyMaterialVoids()` calcula por separado la union de
+todo el material pintado. Solo los anillos impares que permanecen dentro de
+esa union se clasifican como vacios globales. Si ya existe el mismo contorno,
+se marca esa entidad; si el hueco nace de la union de varias piezas, se crea
+un borde sintetico no seleccionable.
+
+Los vacios conservan metadatos en `State`, snapshots, proyectos y undo/redo.
+No aparecen como filas ni objetivos de seleccion, pero su borde sigue visible
+y `absorbChildren()` siempre los incorpora como holes de la pieza contenedora.
+
+La identidad entre un borde original y uno booleano se verifica por
+solapamiento, area y caja completa. Los vacios explicitos no tienen limite de
+tamaño. Solo se ignoran residuos sinteticos sin entidad de origen cuyo ancho
+efectivo sea menor o igual a la tolerancia geometrica existente de `0.01 mm`.
+
+### SVG
+
+SVG conserva subtrazados y reglas de relleno. Los `paintItems` ya construidos
+por el parser son la fuente canonica de ocupacion; no se inspecciona color de
+fondo ni se inventa una segunda interpretacion. Por eso la deteccion es
+determinista tanto para un path compuesto como para un hueco delimitado por
+varias formas.
+
+### DXF
+
+DXF no guarda fill-rule ni un identificador de objeto compuesto. Todos los
+`LWPOLYLINE` del Tucan comparten owner y solo tienen handles consecutivos.
+No existe una solucion universal para distinguir dos objetos anidados de dos
+subtrazados usando solo ese formato.
+
+Para los DXF exportados por Corel se agrego una inferencia acotada:
+
+1. se forman corridas consecutivas de igual layer/color;
+2. dentro de cada corrida solo se agrupan curvas con contencion real mayor o
+   igual a `99.9%`;
+3. formas disjuntas o parcialmente solapadas permanecen independientes;
+4. esa reconstruccion se usa solo para la union de material.
+
+`buildDXFPaintItems()` sigue controlando la particion visible sin cambios de
+comportamiento. Separar ambos caminos evito que la deteccion de vacios
+absorbiera alas, pico, patas u otras piezas legitimas.
+
+### Forma de abordaje y regresion
+
+El cambio se desarrollo con una secuencia de hipotesis medibles:
+
+1. reproducir con los Tucan SVG/DXF reales;
+2. separar visibilidad de ocupacion;
+3. probar primero la union global;
+4. rechazar una primera integracion DXF que alteraba la cantidad de piezas;
+5. conservar el resolver visual y aislar la inferencia de material;
+6. medir residuos de aproximacion y asociacion de contornos;
+7. validar UI, extrusion, 3MF y laminado externo.
+
+La regresion cubre agujero SVG explicito, region luego rellenada, hueco
+formado por cuatro piezas, compuesto DXF y DXF rellenado posteriormente.
+Tambien exige para ambos Tucan exactamente un vacio, cero filas/selecciones
+de vacio y un hole incorporado a la extrusion.
+
+Resultados finales: DXF `17` contornos / `11` piezas / `4296` triangulos;
+SVG `19` contornos / `12` piezas / `12680` triangulos. Todos los 3MF tienen
+cero aristas abiertas/no-manifold, winding coherente y volumen positivo.
+Bambu Studio reconoce una raiz, lamina un objeto y genera G-code. Version
+HTML/Electron: `1.0.9`.

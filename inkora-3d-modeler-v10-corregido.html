@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.8">
+<meta name="inkora-version" content="1.0.9">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -659,7 +659,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.8</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.9</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -850,7 +850,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.8').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.9').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -895,6 +895,7 @@ const Utils = (() => {
   function isVisibleContour(c) {
     if (!c || c._deleted) return false;
     if (c._isFakeContour && !c.piece) return false;
+    if (c._isVoid && !c.piece) return false;
     if (c.extruded && c.piece) return true;
     if (c.extruded && c.piece === null) return false;
     return true;
@@ -1855,101 +1856,160 @@ const DXFParser = (() => {
     return items;
   }
 
-  // Umbral de área para confirmar que un hueco desaparecido está realmente
-  // contenido en su contenedor (no solo parcialmente superpuesto).
-  const DXF_HOLE_CONTAINMENT = 0.97;
+  const DXF_COMPOUND_CONTAINMENT = 0.999;
 
-  function rawDXFPaintItem(sh, i) {
+  function dxfPaintStyleKey(shape) {
+    const layer = shape.userData?.layer || '0';
+    const color = normalizeHex(shape.userData?.color) || '';
+    return `${layer}|${color}`;
+  }
+
+  // Corel exporta cada subtrazado de un objeto compuesto como una
+  // LWPOLYLINE independiente. El DXF no conserva fill-rule ni un id de
+  // objeto, pero mantiene juntos y en orden los subtrazados con el mismo
+  // estilo. Solo se agrupan los que ademas tienen contencion geometrica
+  // completa; formas disjuntas o parcialmente solapadas siguen siendo
+  // objetos de pintura independientes.
+  function buildDXFMaterialItems(shapes) {
+    const runs = [];
+    shapes.forEach((shape, sourceIdx) => {
+      const key = dxfPaintStyleKey(shape);
+      const last = runs[runs.length - 1];
+      if (!last || last.key !== key) {
+        runs.push({ key, members: [{ shape, sourceIdx }] });
+      } else {
+        last.members.push({ shape, sourceIdx });
+      }
+    });
+
+    const paintItems = [];
+    runs.forEach((run, runIdx) => {
+      const runShapes = run.members.map(member => member.shape);
+      const topology = computeHierarchy(runShapes);
+
+      topology.forEach((item, childIdx) => {
+        let bestParent = -1;
+        let bestArea = Infinity;
+        topology.forEach((parent, parentIdx) => {
+          if (childIdx === parentIdx || parent.area <= item.area) return;
+          const fraction = SVGVisibleGeometry.overlapFraction(item.pts, parent.pts);
+          if (fraction >= DXF_COMPOUND_CONTAINMENT && parent.area < bestArea) {
+            bestParent = parentIdx;
+            bestArea = parent.area;
+          }
+        });
+        item.parentIdx = bestParent;
+      });
+
+      const children = new Map();
+      topology.forEach((item, idx) => {
+        if (item.parentIdx === -1) return;
+        if (!children.has(item.parentIdx)) children.set(item.parentIdx, []);
+        children.get(item.parentIdx).push(idx);
+      });
+
+      function collectSubtree(idx, out) {
+        out.push(idx);
+        (children.get(idx) || []).forEach(childIdx => collectSubtree(childIdx, out));
+      }
+
+      topology.forEach((item, rootIdx) => {
+        if (item.parentIdx !== -1) return;
+        const subtree = [];
+        collectSubtree(rootIdx, subtree);
+        const root = run.members[rootIdx];
+        paintItems.push({
+          rings: subtree.map(idx => topology[idx].pts),
+          layer: root.shape.userData?.layer || '0',
+          color: normalizeHex(root.shape.userData?.color),
+          elementId: `dxf:${runIdx}:${root.sourceIdx}`,
+        });
+      });
+    });
+    return paintItems;
+  }
+
+  const DXF_LOCAL_CONTAINMENT = 0.97;
+
+  function rawDXFPaintItem(shape, sourceIdx) {
     return {
-      rings: [sh.getPoints(128).map(p => ({ x: p.x, y: p.y }))],
-      layer: sh.userData?.layer || '0',
-      color: normalizeHex(sh.userData?.color),
-      elementId: `dxf:${i}`,
+      rings: [shape.getPoints(128).map(point => ({
+        x: point.x,
+        y: point.y,
+      }))],
+      layer: shape.userData?.layer || '0',
+      color: normalizeHex(shape.userData?.color),
+      elementId: `dxf:${sourceIdx}`,
     };
   }
 
-  // SVGVisibleGeometry.resolve() asume que "lo dibujado después tapa a lo
-  // anterior" (orden del archivo = orden de pintado). Eso es correcto para
-  // piezas sólidas independientes que se superponen (ej. un ala dibujada
-  // sobre el cuerpo: el ala sobrevive con su propia área, y el cuerpo
-  // pierde la parte tapada — nunca desaparece del todo). Pero cuando una
-  // pieza más chica queda ANTES en el archivo que una pieza más grande que
-  // geométricamente la contiene, esta última la tapa por completo y
-  // desaparece. Hay dos casos bien distintos ahí:
-  //
-  //  1) Hueco real, sin nada dibujado dentro (ej. la pupila, el agujero
-  //     del llavero): no es una pieza propia, es un vacío. Se recorta como
-  //     anillo extra de su contenedor (para que quede como agujero real al
-  //     extruir) y NO se conserva como ítem visible propio.
-  //  2) Pieza compuesta, con OTRA forma dibujada dentro suyo (ej. el
-  //     anillo naranja del ojo, que tiene el anillo interior y la pupila
-  //     dibujados adentro): no es un hueco, es una pieza sólida que solo
-  //     quedó mal ordenada en el archivo. Si se la tratara igual que el
-  //     caso 1 (agujero extra + descartarla), su color desaparece del
-  //     todo y queda un vacío donde debería verse su relleno — y ese
-  //     vacío deja asomar el contorno de la pieza de fondo con el mismo
-  //     trazo que el borde del agujero recién cortado: el "doble
-  //     contorno" reportado. La corrección es reubicarla justo después de
-  //     su contenedor en el orden de pintado, sin duplicar su geometría:
-  //     el resolver resta su área del contenedor exactamente igual que ya
-  //     hace con ala/pico/patas sobre el cuerpo.
-  //
-  // Distinguir un caso del otro es geométrico, no por color (BYLAYER hace
-  // que piezas sin color propio -- cuerpo, agujero del llavero -- hereden
-  // el mismo color de capa que piezas con relleno real, así que el color
-  // solo no alcanza): si la pieza desaparecida contiene a su vez otra
-  // forma (huella ≥97% con Clipper), es compuesta; si no contiene nada,
-  // es un hueco simple.
+  // Este paso conserva el particionado visible probado del DXF: si el orden
+  // de entidades de Corel tapa por completo un contorno anterior, distingue
+  // un corte local simple de una pieza compuesta que contiene otros detalles.
+  // No decide si existe un vacio global; esa decision se toma despues con
+  // buildDXFMaterialItems() y la union total de material.
   function buildDXFPaintItems(shapes) {
-    const rawItems = shapes.map((sh, i) => rawDXFPaintItem(sh, i));
+    const rawItems = shapes.map((shape, idx) => rawDXFPaintItem(shape, idx));
     const dryRun = SVGVisibleGeometry.resolve(rawItems);
-    const survived = new Set(dryRun.map(e => (e.elementId || '').split(':part:')[0]));
-    const vanished = shapes.map((_, i) => !survived.has(`dxf:${i}`));
-
-    if (!vanished.some(Boolean)) return rawItems; // nada desapareció, camino normal sin cambios
+    const survived = new Set(
+      dryRun.map(entry => (entry.elementId || '').split(':part:')[0])
+    );
+    const vanished = shapes.map((_, idx) => !survived.has(`dxf:${idx}`));
+    if (!vanished.some(Boolean)) return rawItems;
 
     const hierarchy = computeHierarchy(shapes);
-    const container = shapes.map((_, i) => {
-      if (!vanished[i]) return -1;
-      let best = -1, bestArea = Infinity;
-      shapes.forEach((_, j) => {
-        if (j === i) return;
-        const frac = SVGVisibleGeometry.overlapFraction(hierarchy[i].pts, hierarchy[j].pts);
-        if (frac >= DXF_HOLE_CONTAINMENT && hierarchy[j].area < bestArea) {
-          best = j; bestArea = hierarchy[j].area;
+    const container = shapes.map((_, idx) => {
+      if (!vanished[idx]) return -1;
+      let best = -1;
+      let bestArea = Infinity;
+      shapes.forEach((__, candidateIdx) => {
+        if (candidateIdx === idx) return;
+        const fraction = SVGVisibleGeometry.overlapFraction(
+          hierarchy[idx].pts,
+          hierarchy[candidateIdx].pts
+        );
+        if (fraction >= DXF_LOCAL_CONTAINMENT &&
+            hierarchy[candidateIdx].area < bestArea) {
+          best = candidateIdx;
+          bestArea = hierarchy[candidateIdx].area;
         }
       });
       return best;
     });
 
-    const isComposite = shapes.map((_, i) => vanished[i] && shapes.some((_, j) =>
-      j !== i && SVGVisibleGeometry.overlapFraction(hierarchy[j].pts, hierarchy[i].pts) >= DXF_HOLE_CONTAINMENT
-    ));
+    const isComposite = shapes.map((_, idx) =>
+      vanished[idx] && shapes.some((__, candidateIdx) =>
+        candidateIdx !== idx &&
+        SVGVisibleGeometry.overlapFraction(
+          hierarchy[candidateIdx].pts,
+          hierarchy[idx].pts
+        ) >= DXF_LOCAL_CONTAINMENT
+      )
+    );
 
-    // Huecos simples: fuera del orden de pintado (se agregan como anillo
-    // extra del contenedor más abajo). Piezas compuestas: reubicadas justo
-    // después de su contenedor real, sin duplicar geometría.
-    let order = shapes.map((_, i) => i).filter(i => !vanished[i]);
-    shapes.forEach((_, i) => {
-      if (!vanished[i] || !isComposite[i]) return;
-      const insertAfter = order.indexOf(container[i]);
-      order.splice(insertAfter >= 0 ? insertAfter + 1 : order.length, 0, i);
+    const order = shapes.map((_, idx) => idx).filter(idx => !vanished[idx]);
+    shapes.forEach((_, idx) => {
+      if (!vanished[idx] || !isComposite[idx]) return;
+      const insertAfter = order.indexOf(container[idx]);
+      order.splice(insertAfter >= 0 ? insertAfter + 1 : order.length, 0, idx);
     });
 
-    return order.map(i => {
-      const rings = [hierarchy[i].pts];
-      shapes.forEach((_, j) => {
-        if (!vanished[j] || isComposite[j]) return;
-        // Cortar el hueco simple en TODO contenedor válido que lo contenga
-        // (no solo el más chico/directo): si una pieza compuesta más grande
-        // (ej. el anillo del ojo) también lo contiene, sin este corte le
-        // asoma un resto sólido propio justo en el hueco -- el mismo hueco
-        // recuperado quedaría tapado de nuevo, aunque sea parcialmente.
-        if (SVGVisibleGeometry.overlapFraction(hierarchy[j].pts, hierarchy[i].pts) >= DXF_HOLE_CONTAINMENT) {
-          rings.push(hierarchy[j].pts);
-        }
+    return order.map(idx => {
+      const rings = [hierarchy[idx].pts];
+      shapes.forEach((_, holeIdx) => {
+        if (!vanished[holeIdx] || isComposite[holeIdx]) return;
+        const fraction = SVGVisibleGeometry.overlapFraction(
+          hierarchy[holeIdx].pts,
+          hierarchy[idx].pts
+        );
+        if (fraction >= DXF_LOCAL_CONTAINMENT) rings.push(hierarchy[holeIdx].pts);
       });
-      return { rings, layer: shapes[i].userData?.layer || '0', color: normalizeHex(shapes[i].userData?.color), elementId: `dxf:${i}` };
+      return {
+        rings,
+        layer: shapes[idx].userData?.layer || '0',
+        color: normalizeHex(shapes[idx].userData?.color),
+        elementId: `dxf:${idx}`,
+      };
     });
   }
 
@@ -1987,10 +2047,17 @@ const DXFParser = (() => {
     // Segunda cesion: resolver visibilidad y hierarchy con muchos shapes puede tomar >16ms
     await new Promise(ok => setTimeout(ok, 0));
 
-    const flat = SVGVisibleGeometry.resolve(buildDXFPaintItems(shapes));
+    const paintItems = buildDXFPaintItems(shapes);
+    const materialItems = buildDXFMaterialItems(shapes);
+    let flat = SVGVisibleGeometry.resolve(paintItems);
 
     if (!flat.length) return [];
 
+    flat = SVGVisibleGeometry.applyMaterialVoids(
+      materialItems,
+      flat,
+      'dxf-inferred'
+    );
     const hierarchy = computeHierarchy(flat.map(f => f.shape));
     let gMinX = Infinity, gMaxX = -Infinity, gMinY = Infinity, gMaxY = -Infinity;
     flat.forEach(({ shape }) => {
@@ -2007,6 +2074,10 @@ const DXFParser = (() => {
       layer:     f.layer || '0',
       color:     normalizeHex(f.color), // null si no hay color explícito
       elementId: f.elementId || null,
+      isVoid:    !!f.isVoid,
+      voidKind:  f.voidKind || null,
+      voidArea:  Number(f.voidArea) || 0,
+      syntheticVoid: !!f.syntheticVoid,
     }));
   }
   // computeHierarchy es puramente geométrica (point-in-polygon sobre shapes
@@ -2342,6 +2413,20 @@ const SVGVisibleGeometry = (() => {
     return Math.abs(lib.Clipper.Area(path)) / (SCALE * SCALE);
   }
 
+  function pathBounds(path) {
+    return (path || []).reduce((bounds, point) => ({
+      minX: Math.min(bounds.minX, point.X),
+      maxX: Math.max(bounds.maxX, point.X),
+      minY: Math.min(bounds.minY, point.Y),
+      maxY: Math.max(bounds.maxY, point.Y),
+    }), {
+      minX: Infinity,
+      maxX: -Infinity,
+      minY: Infinity,
+      maxY: -Infinity,
+    });
+  }
+
   function cleanPaths(paths, lib) {
     const raw = (paths || []).filter(p => Array.isArray(p) && p.length >= 3);
     const cleaned = lib.Clipper.CleanPolygons
@@ -2575,6 +2660,123 @@ const SVGVisibleGeometry = (() => {
     });
   }
 
+  function materialUnionPaths(items, lib) {
+    let occupied = [];
+    (items || []).forEach(item => {
+      const raw = (item.rings || []).map(toClipperPath).filter(Boolean);
+      const painted = clipPaths(lib, lib.ClipType.ctUnion, raw, []);
+      if (!painted.length) return;
+      occupied = occupied.length
+        ? clipPaths(lib, lib.ClipType.ctUnion, occupied, painted)
+        : painted;
+    });
+    return occupied;
+  }
+
+  function sameRegion(left, right, lib) {
+    if (!left || !right) return false;
+    const leftArea = pathArea(left, lib);
+    const rightArea = pathArea(right, lib);
+    if (leftArea <= 0 || rightArea <= 0) return false;
+    const intersection = clipPaths(
+      lib,
+      lib.ClipType.ctIntersection,
+      [left],
+      [right]
+    );
+    const intersectionArea = intersection.reduce(
+      (sum, path) => sum + pathArea(path, lib),
+      0
+    );
+    // El mismo borde puede llegar por dos rutas de teselado distintas
+    // (SVGLoader y Clipper). Se exige 99.5% de solapamiento para reconocerlo
+    // sin depender de que ambos polígonos tengan exactamente los mismos nodos.
+    const tolerance = Math.max(0.0005, Math.max(leftArea, rightArea) * 0.005);
+    if (leftArea - intersectionArea <= tolerance &&
+        rightArea - intersectionArea <= tolerance) {
+      return true;
+    }
+
+    // Clipper puede rechazar la intersección de dos aproximaciones de una
+    // curva cerrada aunque representen la misma región. Área y caja completas
+    // evitan en ese caso crear un segundo borde encima del original.
+    const leftBounds = pathBounds(left);
+    const rightBounds = pathBounds(right);
+    const boundsTolerance = COINCIDENT_EDGE_WIDTH * SCALE;
+    return Math.abs(leftArea - rightArea) <= tolerance &&
+      Math.abs(leftBounds.minX - rightBounds.minX) <= boundsTolerance &&
+      Math.abs(leftBounds.maxX - rightBounds.maxX) <= boundsTolerance &&
+      Math.abs(leftBounds.minY - rightBounds.minY) <= boundsTolerance &&
+      Math.abs(leftBounds.maxY - rightBounds.maxY) <= boundsTolerance;
+  }
+
+  // Un hueco local de una capa no es necesariamente un vacio del modelo:
+  // puede dejar ver material pintado por otra pieza. Se une la ocupacion de
+  // todos los objetos y solo se marcan los anillos impares que siguen fuera
+  // de esa union. Si el borde del vacio nace de varias piezas y no existe
+  // como contorno individual, se agrega un contorno sintetico no seleccionable.
+  function applyMaterialVoids(items, flatEntries, voidKind) {
+    const lib = globalThis.ClipperLib;
+    if (!lib?.Clipper || !lib?.ClipType || !lib?.PolyFillType) {
+      return (flatEntries || []).map(entry => ({
+        ...entry,
+        isVoid: false,
+        voidKind: null,
+        voidArea: 0,
+      }));
+    }
+
+    const occupied = materialUnionPaths(items, lib);
+    const occupiedTopology = pathParentHierarchy(occupied, lib);
+    const voidPaths = occupiedTopology
+      .filter(item => item.depth % 2 === 1)
+      .map(item => item.path);
+    const out = (flatEntries || []).map(entry => ({
+      ...entry,
+      isVoid: false,
+      voidKind: null,
+      voidArea: 0,
+    }));
+    const flatPaths = out.map(entry => toClipperPath(entry.shape.getPoints(128)));
+
+    voidPaths.forEach((voidPath, voidIdx) => {
+      let matchIdx = -1;
+      for (let i = 0; i < flatPaths.length; i++) {
+        if (!flatPaths[i]) continue;
+        if (sameRegion(flatPaths[i], voidPath, lib)) {
+          matchIdx = i;
+          break;
+        }
+      }
+
+      const area = pathArea(voidPath, lib);
+      if (matchIdx !== -1) {
+        out[matchIdx].isVoid = true;
+        out[matchIdx].voidKind = voidKind;
+        out[matchIdx].voidArea = area;
+        return;
+      }
+
+      // Los residuos creados únicamente por diferencias de aproximación
+      // entre curvas no son agujeros del diseño. Los contornos explícitos se
+      // aceptan arriba sin límite de tamaño; este filtro solo afecta vacíos
+      // sintéticos que no existen como entidad de origen.
+      if (pathEffectiveWidth(voidPath, lib) <= COINCIDENT_EDGE_WIDTH) return;
+
+      out.push({
+        shape: shapeFromPoints(fromClipperPath(voidPath)),
+        layer: '__void__',
+        color: null,
+        elementId: `void:${voidKind}:${voidIdx}`,
+        isVoid: true,
+        voidKind,
+        voidArea: area,
+        syntheticVoid: true,
+      });
+    });
+    return out;
+  }
+
   // Fracción del área de `childPts` que queda contenida dentro de `parentPts`
   // (0..1), vía intersección booleana real con Clipper -- no un solo punto
   // de prueba. Usado por DXFParser para encontrar, dado un anillo que
@@ -2593,7 +2795,7 @@ const SVGVisibleGeometry = (() => {
     return interArea / childArea;
   }
 
-  return { resolve, shapeFromPoints, overlapFraction };
+  return { resolve, shapeFromPoints, overlapFraction, applyMaterialVoids };
 })();
 
 
@@ -2746,6 +2948,7 @@ const SVGParser = (() => {
       const orig = flatByShape.get(sh);
       return { shape: sh, layer: sh.userData.layer, color: sh.userData.color, elementId: orig.elementId };
     });
+    flat = SVGVisibleGeometry.applyMaterialVoids(paintItems, flat, 'svg-material');
 
     await new Promise(ok => setTimeout(ok, 0));
 
@@ -2767,6 +2970,10 @@ const SVGParser = (() => {
       layer: f.layer,
       color: f.color,
       elementId: f.elementId || null,
+      isVoid: !!f.isVoid,
+      voidKind: f.voidKind || null,
+      voidArea: Number(f.voidArea) || 0,
+      syntheticVoid: !!f.syntheticVoid,
     }));
   }
 
@@ -4532,6 +4739,10 @@ const History = (() => {
         layer:   c.layer || '0',
         color:   c.color ?? null, // null se preserva — se resuelve al mostrar, según tema
         elementId: c.elementId ?? null,
+        isVoid: !!c._isVoid,
+        voidKind: c._voidKind || null,
+        voidArea: Number(c._voidArea) || 0,
+        syntheticVoid: !!c._syntheticVoid,
         sel2D:   c.sel2D,
         extruded: c.extruded,
         depthOverride: c.depthOverride ?? null,  // profundidad individual por contorno
@@ -5249,7 +5460,7 @@ const PanelUI = (() => {
   function toggleSel(idx){
     // Legacy: usado por la tecla 'E' de extrude; funciona igual que antes
     const c=State.contours[idx];
-    if(c.extruded)return;
+    if(!Utils.isVisibleContour(c)||c.extruded)return;
     c.sel2D=!c.sel2D;
     if(c.sel2D) { State.selectedIdxs.add(idx); State.selectedFaces.set(idx, 'top'); }
     else { State.selectedIdxs.delete(idx); State.selectedFaces.delete(idx); }
@@ -5765,6 +5976,10 @@ const PanelUI = (() => {
           sel2D: false, extruded: true, piece: null,
           depthOverride: sc.depthOverride ?? null,
           _isFakeContour: true,
+          _isVoid: !!sc.isVoid,
+          _voidKind: sc.voidKind || null,
+          _voidArea: Number(sc.voidArea) || 0,
+          _syntheticVoid: !!sc.syntheticVoid,
           _sourceContourIdx: Number.isInteger(sc.sourceContourIdx) ? sc.sourceContourIdx : null,
           _panelHidden: !!sc.panelHidden,
           _deleted: !!sc.deleted,
@@ -5846,6 +6061,10 @@ const PanelUI = (() => {
         flatMesh, outlineMesh,
         sel2D: sc.sel2D, extruded: sc.extruded, piece: null,
         depthOverride: sc.depthOverride ?? null,
+        _isVoid: !!sc.isVoid,
+        _voidKind: sc.voidKind || null,
+        _voidArea: Number(sc.voidArea) || 0,
+        _syntheticVoid: !!sc.syntheticVoid,
         _sourceContourIdx: Number.isInteger(sc.sourceContourIdx) ? sc.sourceContourIdx : null,
         _panelHidden: !!sc.panelHidden,
         _deleted: !!sc.deleted,
@@ -7481,7 +7700,10 @@ const PanelUI = (() => {
     // extruir): solo hijos con depth+1, no toda la descendencia. Se calcula
     // una vez antes del loop porque necesita ver todo shapeData completo.
     const directHolesOf = shapeData.map((_, i) => directHoleShapes(shapeData, i));
-    shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color,elementId},i)=>{
+    shapeData.forEach(({
+      shape,offX,offY,depth,parentIdx,layer,color,elementId,
+      isVoid,voidKind,voidArea,syntheticVoid
+    },i)=>{
       // color se guarda TAL CUAL viene (puede ser null = "sin color
       // explícito"). No se hornea el default acá — así, si el usuario
       // cambia de tema después de importar, refreshContourVisuals()
@@ -7493,7 +7715,15 @@ const PanelUI = (() => {
       Viewport.add2D(flatMesh);Viewport.add2D(outlineMesh);
       // depth y parentIdx vienen del parser: permiten saber si este contorno
       // es un hueco de otro al momento de extruir
-      State.contours.push({shape,offX,offY,depth,parentIdx,layer,color,elementId: elementId ?? null,flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null});
+      State.contours.push({
+        shape,offX,offY,depth,parentIdx,layer,color,
+        elementId: elementId ?? null,
+        flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null,
+        _isVoid: !!isVoid,
+        _voidKind: voidKind || null,
+        _voidArea: Number(voidArea) || 0,
+        _syntheticVoid: !!syntheticVoid,
+      });
     });
     PanelUI.renderList();PanelUI.refreshContourVisuals();PanelUI.updateModeBadge();
     // Importar cambia la geometría, no el punto de vista del usuario.
@@ -7701,7 +7931,8 @@ const PanelUI = (() => {
         const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
         holeIdxs.push(cidx);
-        const sameElement = sameElementForAutoTopology(parent, candidate);
+        const sameElement = candidate._isVoid ||
+          sameElementForAutoTopology(parent, candidate);
         if (!sameElement) return;
 
         absorbed.add(candidate);
