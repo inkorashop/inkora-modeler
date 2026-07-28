@@ -1151,3 +1151,34 @@ mismo color de capa que piezas con relleno real):
 - Sintaxis del archivo completo validada con `node --check` en cada paso.
 - Instrumentación de debug temporal (`window.__DXF_DEBUG__`) usada
   durante la investigación, retirada antes de este commit.
+
+## 2026-07-28 (seguimiento) -- La pieza compuesta se "reubicaba", pero quedaba duplicada
+
+**Sintoma:** despues del commit `753e0a7`, el diagnostico conceptual del
+doble contorno era correcto (distinguir huecos simples de piezas
+compuestas), pero la implementacion tenia una contradiccion: el comentario
+decia "reubicadas ... sin duplicar geometria", mientras el codigo dejaba la
+pieza compuesta en el `order` original y ademas la insertaba de nuevo despues
+de su contenedor. Eso podia mantener exactamente el tipo de duplicacion que
+se estaba intentando eliminar.
+
+**Fix:** `order` ahora arranca solo con piezas no desaparecidas. Luego se
+insertan explicitamente las piezas compuestas desaparecidas despues de su
+contenedor real. Si por alguna razon el contenedor no esta en la lista, se
+agrega al final en vez de usar `indexOf(...) + 1` con `-1`.
+
+**Version visible:** se subio la version HTML/Electron a `1.0.3`. El cambio
+anterior estaba deployado en Vercel, pero seguia mostrando `v1.0.2`, asi que
+era imposible distinguir visualmente si se estaba abriendo el build nuevo.
+
+**Desktop local:** al probar `npm start`, la app se caia antes de crear la
+ventana porque el proceso heredaba `ELECTRON_RUN_AS_NODE=1`. En ese modo,
+`electron.exe` ejecuta `main.js` como Node y `require('electron')` devuelve
+la ruta del binario en vez de las APIs `app`/`BrowserWindow`; por eso
+`electron-updater` fallaba con `Cannot read properties of undefined (reading
+'getVersion')`. `main.js` ahora detecta ese caso al principio, relanza
+Electron con esa variable limpia y sale del proceso Node intermedio.
+
+**Release desktop:** GitHub Releases seguia en `v1.0.1`; no habia tag/release
+`v1.0.2`. Por lo tanto el cambio web no podia llegar a la app instalada por
+auto-update hasta publicar un nuevo release/installer.

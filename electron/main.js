@@ -1,8 +1,27 @@
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
-const { autoUpdater } = require('electron-updater');
+const electronApi = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+
+// Si el entorno hereda ELECTRON_RUN_AS_NODE=1, electron.exe ejecuta este
+// archivo como Node y `require('electron')` devuelve la ruta del binario en
+// vez de las APIs de Electron. Relanzamos limpiando esa variable para que el
+// acceso directo local siga abriendo la app.
+if (typeof electronApi === 'string') {
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const child = spawn(electronApi, [__dirname], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+    env,
+  });
+  child.unref();
+  process.exit(0);
+}
+
+const { app, BrowserWindow, Menu, ipcMain } = electronApi;
+const { autoUpdater } = require('electron-updater');
 
 // En desarrollo, incluso si se abre electron/dist/win-unpacked desde el
 // acceso directo local, cargar el HTML vivo del repo evita ejecutar una copia
