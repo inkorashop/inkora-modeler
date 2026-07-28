@@ -13,6 +13,10 @@ Luego revisar el estado local:
 git status --short --branch
 ```
 
+Antes de modificar importacion DXF/SVG, booleanas, contornos, extrusion o
+exportacion 3MF, leer `GEOMETRY_PIPELINE.md`. Contiene los invariantes, las
+hipotesis descartadas y el metodo de regresion del pipeline geometrico.
+
 Reglas especificas:
 
 - No modificar archivos en `Viejo/` salvo pedido explicito.

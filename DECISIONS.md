@@ -1253,3 +1253,10 @@ Resultados: DXF `17` contornos / `11` piezas / `4296` triangulos; SVG `19`
 contornos / `12` piezas / `12680` triangulos. En ambos casos:
 `0` mallas invalidas, `0` piezas fallidas al exportar y `0` aristas no
 manifold. Version HTML/Electron: `1.0.4`.
+
+### Guia de mantenimiento
+
+El modelo del diseno por capas, el proceso de investigacion, las alternativas
+descartadas, los invariantes y el protocolo de pruebas quedaron consolidados
+en `GEOMETRY_PIPELINE.md`. Debe leerse antes de modificar importacion,
+resolucion booleana, extrusion o exportacion.
