@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.6">
+<meta name="inkora-version" content="1.0.7">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -154,6 +154,17 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .btn:disabled{opacity:.3;pointer-events:none;transform:none;}
 .btn.danger{border-color:rgba(255,79,79,.4);color:var(--danger);background:transparent}
 .btn.danger:hover{background:rgba(255,79,79,.08);border-color:var(--danger)}
+.export-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}
+.export-gap-toggle{
+  min-width:43px;justify-content:center;padding-left:7px;padding-right:7px;
+  color:var(--text-faint);
+}
+.export-gap-toggle svg{width:11px;height:11px;flex-shrink:0}
+.export-gap-toggle span{font-size:8px}
+.export-gap-toggle[aria-checked="true"]{
+  color:var(--accent);border-color:var(--accent);
+  background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.08);
+}
 
 /* ── Undo / Redo ── */
 .history-group{
@@ -629,7 +640,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.6</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.7</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -658,10 +669,18 @@ html.light{
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 9V3M3.5 5.5L6 3l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Extruir
     </button>
-    <button class="btn" id="btn-export" disabled title="Exportar el modelo como 3MF">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Exportar 3MF
-    </button>
+    <div class="export-actions">
+      <button class="btn" id="btn-export" disabled title="Exportar el modelo como 3MF">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Exportar 3MF
+      </button>
+      <button class="btn export-gap-toggle" id="btn-export-gap" type="button" role="switch"
+              aria-checked="false" aria-label="Separacion de 0,001 mm entre piezas al exportar"
+              title="Separacion de 0,001 mm entre piezas al exportar: desactivada">
+        <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2 1.5 6l3 4M7.5 2l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>0,001</span>
+      </button>
+    </div>
     <div id="slicer-wrap">
       <button class="btn" id="btn-slicer" disabled title="Abrir este 3MF en un laminador instalado">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 8.8V3.2l4-1.7 4 1.7v5.6l-4 1.7-4-1.7zM2 3.2l4 1.7 4-1.7M6 4.9v5.6" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
@@ -802,7 +821,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.6').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.7').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -3899,6 +3918,103 @@ const Exporter = (() => {
     return collectRenderGeometry(piece);
   }
 
+  /* Export-only clearance. Each closed surface retreats by half the requested
+     gap along its incident planes. Two touching pieces therefore leave the
+     full requested distance between them without moving either piece or
+     changing the project geometry. */
+  function applyExportClearance(mesh, gapMm, name) {
+    const retreat = gapMm / 2;
+    if (!(retreat > 0)) return mesh;
+
+    const verts = mesh.verts;
+    const indices = mesh.indices;
+    const normalsByVertex = Array.from({ length: mesh.nVerts }, () => []);
+
+    function addUniqueNormal(vertexIdx, normal) {
+      const normals = normalsByVertex[vertexIdx];
+      const duplicate = normals.some(existing =>
+        existing.x * normal.x + existing.y * normal.y + existing.z * normal.z > 0.999999
+      );
+      if (!duplicate) normals.push(normal);
+    }
+
+    for (let offset = 0; offset < indices.length; offset += 3) {
+      const ia = indices[offset];
+      const ib = indices[offset + 1];
+      const ic = indices[offset + 2];
+      const ax = verts[ia * 3], ay = verts[ia * 3 + 1], az = verts[ia * 3 + 2];
+      const bx = verts[ib * 3], by = verts[ib * 3 + 1], bz = verts[ib * 3 + 2];
+      const cx = verts[ic * 3], cy = verts[ic * 3 + 1], cz = verts[ic * 3 + 2];
+      const ux = bx - ax, uy = by - ay, uz = bz - az;
+      const vx = cx - ax, vy = cy - ay, vz = cz - az;
+      let nx = uy * vz - uz * vy;
+      let ny = uz * vx - ux * vz;
+      let nz = ux * vy - uy * vx;
+      const length = Math.hypot(nx, ny, nz);
+      if (length < 1e-12) continue;
+      nx /= length; ny /= length; nz /= length;
+      const normal = { x: nx, y: ny, z: nz };
+      addUniqueNormal(ia, normal);
+      addUniqueNormal(ib, normal);
+      addUniqueNormal(ic, normal);
+    }
+
+    function vertexDisplacement(normals) {
+      if (normals.length === 1) {
+        const n = normals[0];
+        return new THREE.Vector3(-retreat * n.x, -retreat * n.y, -retreat * n.z);
+      }
+      if (normals.length === 2) {
+        const [a, b] = normals;
+        const dot = a.x * b.x + a.y * b.y + a.z * b.z;
+        if (dot > -0.999999) {
+          const scale = -retreat / (1 + dot);
+          return new THREE.Vector3(
+            scale * (a.x + b.x),
+            scale * (a.y + b.y),
+            scale * (a.z + b.z)
+          );
+        }
+      }
+
+      let xx = 1e-12, xy = 0, xz = 0;
+      let yy = 1e-12, yz = 0, zz = 1e-12;
+      let sx = 0, sy = 0, sz = 0;
+      normals.forEach(n => {
+        xx += n.x * n.x; xy += n.x * n.y; xz += n.x * n.z;
+        yy += n.y * n.y; yz += n.y * n.z; zz += n.z * n.z;
+        sx += n.x; sy += n.y; sz += n.z;
+      });
+      const inverse = new THREE.Matrix3().set(
+        xx, xy, xz,
+        xy, yy, yz,
+        xz, yz, zz
+      ).invert();
+      return new THREE.Vector3(
+        -retreat * sx,
+        -retreat * sy,
+        -retreat * sz
+      ).applyMatrix3(inverse);
+    }
+
+    const moved = new Float64Array(verts.length);
+    for (let vertexIdx = 0; vertexIdx < mesh.nVerts; vertexIdx++) {
+      const normals = normalsByVertex[vertexIdx];
+      if (!normals.length) {
+        throw new Error(`${name}: un vertice no tiene superficies incidentes para aplicar la separacion.`);
+      }
+      const delta = vertexDisplacement(normals);
+      moved[vertexIdx * 3] = verts[vertexIdx * 3] + delta.x;
+      moved[vertexIdx * 3 + 1] = verts[vertexIdx * 3 + 1] + delta.y;
+      moved[vertexIdx * 3 + 2] = verts[vertexIdx * 3 + 2] + delta.z;
+    }
+
+    return orientAndValidateMesh(
+      cleanMeshTriangles(moved, indices),
+      `${name} (separacion ${gapMm.toFixed(3)} mm)`
+    );
+  }
+
   /* ── mergeVerticesManual ────────────────────────────────────────────────
      Implementación propia de mergeVertices para cuando
      THREE.BufferGeometryUtils no está disponible.
@@ -4143,9 +4259,9 @@ const Exporter = (() => {
   function serializeObject(objId, cgId, colorIndex, name, verts, indices, nVerts, nTris) {
     let vertsXML = '';
     for (let i = 0; i < nVerts; i++) {
-      const x = verts[i * 3 + 0].toFixed(4);
-      const y = verts[i * 3 + 1].toFixed(4);
-      const z = verts[i * 3 + 2].toFixed(4);
+      const x = verts[i * 3 + 0].toFixed(6);
+      const y = verts[i * 3 + 1].toFixed(6);
+      const z = verts[i * 3 + 2].toFixed(6);
       vertsXML += `<vertex x="${x}" y="${y}" z="${z}"/>`;
     }
 
@@ -4172,15 +4288,19 @@ const Exporter = (() => {
      Fuente unica del 3MF. Exportar y abrir en laminador consumen este mismo
      blob para que ningun camino quede desactualizado.
   ─────────────────────────────────────────────────────────────────────── */
-  async function generate3MFBlob(pieces, filename = 'inkora-model') {
+  async function generate3MFBlob(pieces, filename = 'inkora-model', options = {}) {
     if (!pieces.length) throw new Error('No hay piezas 3D para exportar');
+    const clearanceMm = Math.max(0, Number(options.clearanceMm) || 0);
 
     Utils.toast('Construyendo geometría sólida…', '', 60000);
 
     const errors = [];
     const allGeoms = pieces.map(piece => {
       try {
-        return collectManifoldGeometry(piece);
+        const geometry = collectManifoldGeometry(piece);
+        return clearanceMm > 0
+          ? applyExportClearance(geometry, clearanceMm, piece.name || 'Pieza')
+          : geometry;
       } catch (error) {
         console.error('Error en pieza', piece.name, error);
         errors.push(`${piece.name || 'Pieza'}: ${error.message}`);
@@ -4316,6 +4436,7 @@ const Exporter = (() => {
       filename,
       rootObjectId,
       colorCount: colors.length,
+      clearanceMm,
     };
   }
 
@@ -4326,8 +4447,8 @@ const Exporter = (() => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
-  async function exportMeshes(pieces, filename = 'inkora-model') {
-    const result = await generate3MFBlob(pieces, filename);
+  async function exportMeshes(pieces, filename = 'inkora-model', options = {}) {
+    const result = await generate3MFBlob(pieces, filename, options);
     download3MFBlob(result.blob, filename);
 
     return { failedCount: result.failedCount, totalCount: result.totalCount };
@@ -4591,6 +4712,35 @@ const PanelUI = (() => {
 
   // Índice del último contorno tocado (para Shift+click de rango)
   let _lastTouchedIdx = -1;
+
+  // Las subcaras de una pieza unida conservan indices propios para que el
+  // picking y la re-extrusion sean precisos, pero la lista muestra una sola
+  // fila por pieza. Toda sincronizacion visual debe resolver primero esa fila.
+  function _panelRepresentativeIdx(idx) {
+    const contour = State.contours[idx];
+    if (Utils.isPanelContour(contour, idx)) return idx;
+    if (!contour?.piece) return -1;
+
+    const preferred = Number(contour.piece.contourIdx);
+    if (Number.isInteger(preferred) &&
+        State.contours[preferred]?.piece === contour.piece &&
+        Utils.isPanelContour(State.contours[preferred], preferred)) {
+      return preferred;
+    }
+    return State.contours.findIndex((candidate, candidateIdx) =>
+      candidate?.piece === contour.piece &&
+      Utils.isPanelContour(candidate, candidateIdx)
+    );
+  }
+
+  function _isPanelRowSelected(contour, idx) {
+    if (State.selectedIdxs.has(idx)) return true;
+    if (!contour?.piece) return false;
+    for (const selectedIdx of State.selectedIdxs) {
+      if (State.contours[selectedIdx]?.piece === contour.piece) return true;
+    }
+    return false;
+  }
 
   // ── Selección unificada ────────────────────────────────────────────────────
   // Toda selección pasa por estas funciones. selectedIdxs guarda índices de
@@ -5003,7 +5153,7 @@ const PanelUI = (() => {
      Llamado en cada renderList() cuando el conteo no cambió.
   ────────────────────────────────────────────────────────────────────── */
   function _patchItem(item, c, idx) {
-    const isSel = State.selectedIdxs.has(idx);
+    const isSel = _isPanelRowSelected(c, idx);
     // Clases de estado
     const wantSel2D    = !c.extruded && c.sel2D;
     const wantSel3D    = c.extruded && isSel;
@@ -5138,8 +5288,15 @@ const PanelUI = (() => {
     let idx = -1;
     if (hit) {
       if (hit.is3D) {
-        const pIdx = State.pieces.findIndex(p => p.mesh === hit.mesh);
-        if (pIdx !== -1) idx = State.contours.findIndex(c => c.piece === State.pieces[pIdx]);
+        if (hit.contourIdx != null) {
+          idx = _panelRepresentativeIdx(hit.contourIdx);
+        } else {
+          const pIdx = State.pieces.findIndex(p => p.mesh === hit.mesh);
+          if (pIdx !== -1) {
+            const pieceIdx = State.contours.findIndex(c => c.piece === State.pieces[pIdx]);
+            idx = _panelRepresentativeIdx(pieceIdx);
+          }
+        }
       } else {
         idx = State.contours.findIndex(c => c.flatMesh === hit.mesh || c.outlineMesh === hit.mesh);
       }
@@ -5161,7 +5318,16 @@ const PanelUI = (() => {
 
   function scrollToItem(idx) {
     if (idx == null || idx < 0) return;
-    const el = document.querySelector(`.piece-item[data-idx="${idx}"]`);
+    const rowIdx = _panelRepresentativeIdx(idx);
+    if (rowIdx < 0) return;
+    const collapsedGroup = State.groups.find(group =>
+      group.collapsed && group.memberIdxs.includes(rowIdx)
+    );
+    if (collapsedGroup) {
+      collapsedGroup.collapsed = false;
+      renderList();
+    }
+    const el = document.querySelector(`.piece-item[data-idx="${rowIdx}"]`);
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
@@ -7939,11 +8105,33 @@ const PanelUI = (() => {
     Utils.toast('Escena limpiada.');
   });
 
+  const EXPORT_CLEARANCE_MM = 0.001;
+  let exportClearanceEnabled = false;
+  const exportGapButton = document.getElementById('btn-export-gap');
+
+  function currentExportOptions() {
+    return {
+      clearanceMm: exportClearanceEnabled ? EXPORT_CLEARANCE_MM : 0,
+    };
+  }
+
+  exportGapButton?.addEventListener('click', () => {
+    exportClearanceEnabled = !exportClearanceEnabled;
+    exportGapButton.setAttribute('aria-checked', String(exportClearanceEnabled));
+    exportGapButton.title =
+      `Separacion de 0,001 mm entre piezas al exportar: ` +
+      (exportClearanceEnabled ? 'activada' : 'desactivada');
+  });
+
   document.getElementById('btn-export').addEventListener('click',async()=>{
     if(!State.pieces.length)return;
     Utils.toast('Generando 3MF…','',60000);
     try {
-      const result = await Exporter.exportMeshes(State.pieces, State.filename||'inkora-model');
+      const result = await Exporter.exportMeshes(
+        State.pieces,
+        State.filename||'inkora-model',
+        currentExportOptions()
+      );
       if (result && result.failedCount > 0 && result.failedCount < result.totalCount) {
         Utils.toast(`Exportado con advertencias: ${result.failedCount} de ${result.totalCount} pieza(s) no se pudieron incluir en el archivo.`, 'err');
       } else {
@@ -8007,7 +8195,11 @@ const PanelUI = (() => {
       closePanel();
       Utils.toast(`Generando 3MF para ${label}...`, '', 60000);
       try {
-        const result = await Exporter.generate3MFBlob(State.pieces, State.filename || 'inkora-model');
+        const result = await Exporter.generate3MFBlob(
+          State.pieces,
+          State.filename || 'inkora-model',
+          currentExportOptions()
+        );
         const data = await result.blob.arrayBuffer();
         const response = await window.inkoraSlicer.open({
           slicer,

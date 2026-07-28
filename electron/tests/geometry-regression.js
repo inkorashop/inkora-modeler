@@ -292,6 +292,36 @@ async function collectMetrics(win) {
       return [...State.selectedIdxs];
     }
 
+    function clickObjectTriangleCenter(object) {
+      const geometry = object?.geometry;
+      const positions = geometry?.attributes?.position;
+      if (!positions?.count) return [];
+      const index = geometry.index;
+      const refs = index && index.count >= 3
+        ? [index.getX(0), index.getX(1), index.getX(2)]
+        : [0, 1, 2];
+      const local = refs.reduce(
+        (sum, vertexIdx) => sum.add(new THREE.Vector3(
+          positions.getX(vertexIdx),
+          positions.getY(vertexIdx),
+          positions.getZ(vertexIdx)
+        )),
+        new THREE.Vector3()
+      ).multiplyScalar(1 / 3);
+      object.updateWorldMatrix(true, false);
+      const world = object.localToWorld(local);
+      const projected = world.project(Viewport.getCamera());
+      const canvas = document.getElementById('viewport');
+      const rect = canvas.getBoundingClientRect();
+      canvas.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        button: 0,
+        clientX: rect.left + (projected.x + 1) * rect.width / 2,
+        clientY: rect.top + (1 - projected.y) * rect.height / 2,
+      }));
+      return [...State.selectedIdxs];
+    }
+
     function findNearBoundaryFacePick() {
       for (let parentIdx = 0; parentIdx < State.contours.length; parentIdx++) {
         const parent = State.contours[parentIdx];
@@ -639,6 +669,163 @@ async function collectMetrics(win) {
       };
     }
 
+    async function testViewportPanelSelectionSync() {
+      await importThroughFileInput(dxfText, 'tucan-panel-selection.dxf');
+      State.extrudeMode = 'merged';
+      PanelUI.clearAllSelection();
+      State.contours.forEach((contour, index) => {
+        if (!Utils.isVisibleContour(contour) || contour.depth % 2 === 1) return;
+        contour.sel2D = true;
+        State.selectedIdxs.add(index);
+        State.selectedFaces.set(index, 'top');
+      });
+      document.getElementById('ex-depth').value = '2';
+      document.getElementById('ex-bevel').value = '0';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const piece = State.pieces[0];
+      const rowIdx = piece?.contourIdx;
+      const pickAreas = [];
+      piece?.mesh?.traverse(object => {
+        const contourIdx = object.userData?._pickContourIdx;
+        if (!object.isMesh ||
+            contourIdx == null ||
+            object.userData?._pickFace !== 'top' ||
+            !State.contours[contourIdx]?._panelHidden) return;
+        pickAreas.push(object);
+      });
+      pickAreas.sort((a, b) =>
+        (a.userData._pickArea ?? Infinity) - (b.userData._pickArea ?? Infinity)
+      );
+      if (!piece || !Number.isInteger(rowIdx) || !pickAreas.length) {
+        throw new Error('No se encontro una subcara oculta para probar la seleccion del panel.');
+      }
+
+      State.groups = [{
+        id: State._nextGroupId++,
+        name: 'Seleccion viewport',
+        collapsed: true,
+        memberIdxs: [rowIdx],
+      }];
+      PanelUI.clearAllSelection();
+      PanelUI.renderList();
+      const selected = clickObjectTriangleCenter(pickAreas[0]);
+      await wait(30);
+      const selectedIdx = selected[0] ?? -1;
+      const row = document.querySelector('.piece-item[data-idx="' + rowIdx + '"]');
+
+      return {
+        selected,
+        selectedIsHiddenSubface: selected.length === 1 &&
+          !!State.contours[selectedIdx]?._panelHidden,
+        samePiece: selected.length === 1 &&
+          State.contours[selectedIdx]?.piece === piece,
+        rowIdx,
+        rowSelected: !!row?.classList.contains('sel-3d'),
+        groupExpanded: State.groups[0]?.collapsed === false,
+      };
+    }
+
+    function meshObjectBounds(modelXml) {
+      const xml = new DOMParser().parseFromString(modelXml, 'application/xml');
+      return [...xml.getElementsByTagName('object')]
+        .filter(object => object.getElementsByTagName('mesh').length > 0)
+        .map(object => {
+          const vertices = [...object.getElementsByTagName('vertex')];
+          const min = [Infinity, Infinity, Infinity];
+          const max = [-Infinity, -Infinity, -Infinity];
+          vertices.forEach(vertex => {
+            ['x', 'y', 'z'].forEach((axis, axisIdx) => {
+              const value = Number(vertex.getAttribute(axis));
+              min[axisIdx] = Math.min(min[axisIdx], value);
+              max[axisIdx] = Math.max(max[axisIdx], value);
+            });
+          });
+          return { min, max };
+        });
+    }
+
+    async function testExportClearance() {
+      function rectangle(x1, y1, x2, y2) {
+        const shape = new THREE.Shape();
+        shape.moveTo(x1, y1);
+        shape.lineTo(x2, y1);
+        shape.lineTo(x2, y2);
+        shape.lineTo(x1, y2);
+        shape.closePath();
+        return shape;
+      }
+
+      function makePiece(shape, name, color, baseY = 0) {
+        const mesh = GeoModule.extrude(shape, 0, 0, {
+          depth: 1,
+          bevel: 0,
+          bevelSeg: 1,
+          color,
+        });
+        mesh.position.y += baseY;
+        return GeoModule.makePiece({
+          mesh,
+          name,
+          color,
+          contourIdx: 0,
+          sourceContourIdx: 0,
+          depth: 1,
+          bevel: 0,
+          bevelSeg: 1,
+          baseX: mesh.position.x,
+          baseY: mesh.position.y,
+          baseZ: mesh.position.z,
+        });
+      }
+
+      const pieces = [
+        makePiece(rectangle(0, 0, 10, 10), 'Base', '#ffffff'),
+        makePiece(rectangle(10, 0, 20, 10), 'Lateral', '#ff8800'),
+        makePiece(rectangle(0, 0, 10, 10), 'Superior', '#222222', 1),
+      ];
+      const toggle = document.getElementById('btn-export-gap');
+      const toggleInitial = toggle?.getAttribute('aria-checked');
+      toggle?.click();
+      const toggleEnabled = toggle?.getAttribute('aria-checked');
+      toggle?.click();
+      const toggleRestored = toggle?.getAttribute('aria-checked');
+      const pieceSignaturesBefore = pieces.map(pieceSignature);
+      const plain = await Exporter.generate3MFBlob(
+        pieces,
+        'clearance-off',
+        { clearanceMm: 0 }
+      );
+      const cleared = await Exporter.generate3MFBlob(
+        pieces,
+        'clearance-on',
+        { clearanceMm: 0.001 }
+      );
+      const plainZip = await JSZip.loadAsync(plain.blob);
+      const clearedZip = await JSZip.loadAsync(cleared.blob);
+      const plainXml = await plainZip.file('3D/3dmodel.model').async('string');
+      const clearedXml = await clearedZip.file('3D/3dmodel.model').async('string');
+      const plainBounds = meshObjectBounds(plainXml);
+      const clearedBounds = meshObjectBounds(clearedXml);
+      const pieceSignaturesAfter = pieces.map(pieceSignature);
+
+      return {
+        toggleInitial,
+        toggleEnabled,
+        toggleRestored,
+        optionOff: plain.clearanceMm,
+        optionOn: cleared.clearanceMm,
+        plainSideGap: rounded(plainBounds[1].min[0] - plainBounds[0].max[0]),
+        clearedSideGap: rounded(clearedBounds[1].min[0] - clearedBounds[0].max[0]),
+        plainVerticalGap: rounded(plainBounds[2].min[2] - plainBounds[0].max[2]),
+        clearedVerticalGap: rounded(clearedBounds[2].min[2] - clearedBounds[0].max[2]),
+        modelUnchanged:
+          JSON.stringify(pieceSignaturesBefore) === JSON.stringify(pieceSignaturesAfter),
+        clearedTopology: inspect3MFModel(clearedXml),
+      };
+    }
+
     async function testFullFlow(parser, text, name) {
       const shapeData = await parser.loadText(text);
       const coincidentBoundaryPairs = countCoincidentBounds(shapeData);
@@ -729,9 +916,21 @@ async function collectMetrics(win) {
       );
       const zip = await JSZip.loadAsync(generated.blob);
       const modelXml = await zip.file('3D/3dmodel.model').async('string');
+      const cleared = await Exporter.generate3MFBlob(
+        State.pieces,
+        'tucan-beveled-clearance-test',
+        { clearanceMm: 0.001 }
+      );
+      const clearedZip = await JSZip.loadAsync(cleared.blob);
+      const clearedXml = await clearedZip.file('3D/3dmodel.model').async('string');
       return {
         pieceCount: State.pieces.length,
         failedExports: generated.failedCount,
+        clearance: {
+          failedExports: cleared.failedCount,
+          clearanceMm: cleared.clearanceMm,
+          ...inspect3MFModel(clearedXml),
+        },
         ...inspect3MFModel(modelXml),
       };
     }
@@ -792,7 +991,18 @@ async function collectMetrics(win) {
         await zip.file('Metadata/project_settings.config').async('string')
       );
 
-      const bytes = new Uint8Array(await generated.blob.arrayBuffer());
+      const cleared = await Exporter.generate3MFBlob(
+        State.pieces,
+        'tucan-merged-layered-clearance-test',
+        { clearanceMm: 0.001 }
+      );
+      const clearedZip = await JSZip.loadAsync(cleared.blob);
+      const clearedModelXml = await clearedZip.file('3D/3dmodel.model').async('string');
+      const clearedModel = inspect3MFModel(clearedModelXml);
+
+      // El fixture externo de Bambu usa la variante nueva; el 3MF normal ya
+      // queda cubierto arriba por la inspeccion estructural completa.
+      const bytes = new Uint8Array(await cleared.blob.arrayBuffer());
       let binary = '';
       for (let offset = 0; offset < bytes.length; offset += 0x8000) {
         binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
@@ -811,6 +1021,12 @@ async function collectMetrics(win) {
         filamentColors: projectSettings.filament_colour || [],
         filamentSettings: projectSettings.filament_settings_id || [],
         filamentTypes: projectSettings.filament_type || [],
+        clearance: {
+          failedExports: cleared.failedCount,
+          clearanceMm: cleared.clearanceMm,
+          blobBytes: cleared.blob.size,
+          ...clearedModel,
+        },
         ...model,
       };
     }
@@ -831,6 +1047,8 @@ async function collectMetrics(win) {
       svgFlow: await testFullFlow(SVGParser, svgText, 'tucan-svg-test'),
       beveled3MF: await testBeveled3MFFlow(),
       mergedLayered3MF: await testMergedLayered3MFFlow(),
+      exportClearance: await testExportClearance(),
+      viewportPanelSelection: await testViewportPanelSelectionSync(),
       undoRedo: await testUndoRedoExtrusion(),
       threeDFaceUndoRedoSeparate: await test3DFaceUndoRedo('separate'),
       threeDFaceUndoRedoMerged: await test3DFaceUndoRedo('merged'),
@@ -917,7 +1135,7 @@ async function writeMerged3MFFixture(win) {
   if (!base64) throw new Error('No se genero el fixture 3MF unido.');
   const outputDir = path.join(app.getPath('temp'), 'inkora-geometry-tests');
   await fs.promises.mkdir(outputDir, { recursive: true });
-  const fixturePath = path.join(outputDir, 'tucan-merged-layered.3mf');
+  const fixturePath = path.join(outputDir, 'tucan-merged-layered-clearance.3mf');
   await fs.promises.writeFile(fixturePath, Buffer.from(base64, 'base64'));
   return fixturePath;
 }
@@ -1061,6 +1279,14 @@ function validate(metrics) {
       beveled.nonPositiveVolumes) {
     failures.push('una pieza biselada no conserva una malla 3MF manifold');
   }
+  if (beveled.clearance.failedExports ||
+      beveled.clearance.clearanceMm !== 0.001 ||
+      beveled.clearance.objectCount !== 1 ||
+      beveled.clearance.nonManifoldEdges ||
+      beveled.clearance.inconsistentWindingEdges ||
+      beveled.clearance.nonPositiveVolumes) {
+    failures.push('la separacion de exportacion rompe una pieza biselada');
+  }
   const merged = metrics.mergedLayered3MF;
   if (merged.basePieceCount !== 1 || merged.pieceCount !== merged.sourceFaceCount + 1) {
     failures.push('el flujo unido y re-extruido no conserva la cantidad esperada de volumenes');
@@ -1090,6 +1316,54 @@ function validate(metrics) {
       `el tucan unido exporta topologia invalida ` +
       `(non-manifold ${merged.nonManifoldEdges}, winding ${merged.inconsistentWindingEdges}, ` +
       `volumen ${merged.nonPositiveVolumes})`
+    );
+  }
+  if (merged.clearance.failedExports ||
+      merged.clearance.clearanceMm !== 0.001 ||
+      merged.clearance.objectCount !== merged.pieceCount ||
+      merged.clearance.componentObjectCount !== 1 ||
+      merged.clearance.rootComponentCount !== merged.pieceCount ||
+      merged.clearance.buildItemCount !== 1 ||
+      merged.clearance.nonManifoldEdges ||
+      merged.clearance.inconsistentWindingEdges ||
+      merged.clearance.nonPositiveVolumes) {
+    failures.push('el Tucan con separacion no conserva su estructura multipartes manifold');
+  }
+  const clearance = metrics.exportClearance;
+  if (clearance.toggleInitial !== 'false' ||
+      clearance.toggleEnabled !== 'true' ||
+      clearance.toggleRestored !== 'false') {
+    failures.push('el control de separacion 3MF no alterna su estado correctamente');
+  }
+  if (clearance.optionOff !== 0 ||
+      !nearlyEqual(clearance.plainSideGap, 0, 0.000001) ||
+      !nearlyEqual(clearance.plainVerticalGap, 0, 0.000001)) {
+    failures.push('desactivar la separacion altera la geometria exportada actual');
+  }
+  if (clearance.optionOn !== 0.001 ||
+      !nearlyEqual(clearance.clearedSideGap, 0.001, 0.000002) ||
+      !nearlyEqual(clearance.clearedVerticalGap, 0.001, 0.000002)) {
+    failures.push(
+      `la separacion exportada no mide 0,001 mm ` +
+      `(lateral ${clearance.clearedSideGap}, vertical ${clearance.clearedVerticalGap})`
+    );
+  }
+  if (!clearance.modelUnchanged) {
+    failures.push('la separacion de exportacion modifica las piezas del proyecto');
+  }
+  if (clearance.clearedTopology.nonManifoldEdges ||
+      clearance.clearedTopology.inconsistentWindingEdges ||
+      clearance.clearedTopology.nonPositiveVolumes) {
+    failures.push('la separacion exportada produce topologia invalida');
+  }
+  const panelSelection = metrics.viewportPanelSelection;
+  if (panelSelection.selected.length !== 1 ||
+      !panelSelection.selectedIsHiddenSubface ||
+      !panelSelection.samePiece ||
+      !panelSelection.rowSelected ||
+      !panelSelection.groupExpanded) {
+    failures.push(
+      'seleccionar una subcara desde el viewport no sincroniza y revela su fila visible'
     );
   }
   const history = metrics.undoRedo;
@@ -1213,7 +1487,7 @@ app.whenReady().then(async () => {
          bambu.manifoldFailures !== 0 ||
          bambu.sliceReturnCode !== 0 ||
          bambu.slicedObjectCount !== 1 ||
-         bambu.slicedTriangleCount !== metrics.mergedLayered3MF.triangleCount ||
+         bambu.slicedTriangleCount !== metrics.mergedLayered3MF.clearance.triangleCount ||
          bambu.gcodeBytes === 0)) {
       throw new Error(
         `Bambu Studio rechazo o lamino mal el fixture:\n${JSON.stringify(bambu, null, 2)}`

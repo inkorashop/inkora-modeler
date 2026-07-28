@@ -1393,3 +1393,48 @@ La misma funcion `generate3MFBlob()` alimenta tanto `Exportar 3MF` como
 
 El fixture unido queda en `12` volumenes, `3` materiales y `5752` triangulos,
 con `0` aristas abiertas/no-manifold. Version HTML/Electron: `1.0.6`.
+
+## 2026-07-28 -- v1.0.7: seleccion representativa y holgura 3MF opcional
+
+### Sincronizacion viewport-panel
+
+El viewport podia seleccionar correctamente una subcara de una pieza unida,
+pero el panel no siempre mostraba una fila seleccionada. No era un fallo del
+raycast: las subcaras absorbidas conservan indices propios para re-extruir,
+mientras que `_panelHidden` hace que la lista muestre solo la fila principal
+de la pieza. `_patchItem()` comparaba exclusivamente el indice de esa fila.
+
+Se mantuvieron ambos niveles en vez de perder precision:
+
+- el estado conserva la subcara exacta;
+- `_panelRepresentativeIdx()` resuelve la fila visible del mismo `piece`;
+- seleccion y hover de la fila consideran cualquier subcara de esa pieza;
+- `scrollToItem()` usa el representante y expande su grupo si estaba cerrado.
+
+La regresion hace click real sobre un area de picking oculta del Tucan unido.
+Comprueba que se selecciona esa subcara, se marca la fila principal y se abre
+el grupo colapsado.
+
+### Holgura solo al exportar
+
+Se agrego un switch pequeno junto a `Exportar 3MF`, desactivado por defecto.
+Cuando esta activo, tanto la descarga como `Abrir en laminador` solicitan una
+separacion fisica de `0.001 mm`. El modelo, el historial y el viewport no se
+modifican.
+
+No se trasladan piezas ni se escala su bounding box. Una traslacion no puede
+separar todos los contactos y un escalado introduce errores dependientes del
+tamano. `applyExportClearance()` contrae cada malla manifold `0.0005 mm` por
+superficie mediante los planos incidentes de cada vertice. Dos superficies
+en contacto retroceden de forma simetrica y dejan `0.001 mm` entre ellas,
+incluidas las caras verticales, superiores, inferiores y biseladas.
+
+La malla contraida vuelve a pasar limpieza, orientacion, aristas cerradas y
+volumen positivo antes de serializar. La precision del XML sube de cuatro a
+seis decimales. Con el switch apagado no se llama a esta transformacion.
+
+Las pruebas sinteticas miden `0.001 mm` lateral y vertical, y conservan cero
+errores manifold. El Tucan con holgura mantiene `12` volumenes, `3` materiales
+y `5752` triangulos; Bambu Studio lo inspecciona y lamina correctamente. Puede
+advertir sobre voladizos flotantes por la separacion vertical solicitada.
+Version HTML/Electron: `1.0.7`.

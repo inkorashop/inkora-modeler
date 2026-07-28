@@ -337,3 +337,35 @@ La prueba exige una sola raiz ensamblada, cero aristas abiertas/no-manifold,
 un unico objeto laminado, la misma cantidad de triangulos que el 3MF y G-code
 no vacio. Los materiales se comprueban en el XML y la metadata porque el CLI
 headless no presenta el dialogo de conversion de colores del flujo grafico.
+
+## 11. Fila representativa y separacion de exportacion
+
+Una pieza unida puede conservar varios indices de contorno para identificar
+subcaras desde el viewport, aunque el panel muestre una sola fila. El indice
+seleccionado y el indice de la fila no deben confundirse:
+
+- `selectedIdxs` conserva la subcara exacta para re-extrusion;
+- la fila visible se resuelve por `piece.contourIdx` o por otra fila del mismo
+  `piece`;
+- seleccion, hover y scroll usan esa fila representativa;
+- si pertenece a un grupo cerrado, el click del viewport abre el grupo antes
+  de desplazar el panel.
+
+Desde `v1.0.7`, la separacion opcional del 3MF es una transformacion posterior
+a la validacion de cada malla y nunca modifica `State`, el viewport ni el
+proyecto. Para una holgura solicitada `g = 0.001 mm`, cada superficie retrocede
+`g / 2` hacia el interior. En cada vertice se resuelve la interseccion de los
+planos incidentes desplazados; por eso la operacion funciona en laterales,
+caras superior/inferior, huecos, esquinas y biseles sin trasladar piezas.
+
+Despues de la contraccion se repite el contrato manifold completo. El XML usa
+seis decimales para que la holgura no se pierda por cuantizacion. Con la opcion
+desactivada no se aplica ninguna transformacion y el flujo permanece igual al
+de `v1.0.6`.
+
+La regresion mide un contacto lateral y otro vertical: ambos pasan de
+`0.000 mm` a `0.001 mm`. Tambien valida una pieza biselada, el Tucan multipartes
+y un laminado real de Bambu Studio con la opcion activada. Una separacion
+vertical real puede producir una advertencia de voladizo flotante en el
+laminador; es una consecuencia esperada de activar holgura en todas las
+direcciones, no una malla abierta.
