@@ -1,7 +1,7 @@
 const electronApi = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 if (typeof electronApi === 'string') {
   const env = { ...process.env };
@@ -127,29 +127,60 @@ async function collectMetrics(win) {
         .filter(object => object.getElementsByTagName('mesh').length > 0);
       let triangleCount = 0;
       let nonManifoldEdges = 0;
+      let inconsistentWindingEdges = 0;
+      let nonPositiveVolumes = 0;
 
       objects.forEach(object => {
         const edgeCounts = new Map();
+        const edgeBalance = new Map();
         const vertices = [...object.getElementsByTagName('vertex')].map(vertex =>
-          ['x', 'y', 'z'].map(axis => Number(vertex.getAttribute(axis)).toFixed(6)).join(',')
+          ['x', 'y', 'z'].map(axis => Number(vertex.getAttribute(axis)))
         );
         const triangles = [...object.getElementsByTagName('triangle')];
+        let signedVolume = 0;
         triangleCount += triangles.length;
         triangles.forEach(triangle => {
           const refs = [1, 2, 3].map(i => Number(triangle.getAttribute('v' + i)));
           [[0, 1], [1, 2], [2, 0]].forEach(([a, b]) => {
-            const pointA = vertices[refs[a]];
-            const pointB = vertices[refs[b]];
-            const edge = pointA < pointB
-              ? pointA + ':' + pointB
-              : pointB + ':' + pointA;
+            const left = refs[a];
+            const right = refs[b];
+            const edge = left < right ? left + ':' + right : right + ':' + left;
             edgeCounts.set(edge, (edgeCounts.get(edge) || 0) + 1);
+            edgeBalance.set(
+              edge,
+              (edgeBalance.get(edge) || 0) + (left < right ? 1 : -1)
+            );
           });
+          const [a, b, c] = refs.map(index => vertices[index]);
+          signedVolume += (
+            a[0] * (b[1] * c[2] - b[2] * c[1]) -
+            a[1] * (b[0] * c[2] - b[2] * c[0]) +
+            a[2] * (b[0] * c[1] - b[1] * c[0])
+          ) / 6;
         });
         nonManifoldEdges += [...edgeCounts.values()].filter(count => count !== 2).length;
+        inconsistentWindingEdges += [...edgeBalance.values()]
+          .filter(balance => balance !== 0).length;
+        if (signedVolume <= 1e-9) nonPositiveVolumes++;
       });
 
-      return { objectCount: objects.length, triangleCount, nonManifoldEdges };
+      const componentObjects = [...xml.getElementsByTagName('object')]
+        .filter(object => object.getElementsByTagName('components').length > 0);
+      return {
+        objectCount: objects.length,
+        componentObjectCount: componentObjects.length,
+        rootComponentCount: componentObjects.reduce(
+          (sum, object) => sum + object.getElementsByTagName('component').length,
+          0
+        ),
+        buildItemCount: xml.getElementsByTagName('item').length,
+        colorCount: xml.getElementsByTagName('m:color').length ||
+          xml.getElementsByTagName('color').length,
+        triangleCount,
+        nonManifoldEdges,
+        inconsistentWindingEdges,
+        nonPositiveVolumes,
+      };
     }
 
     async function importThroughFileInput(text, filename) {
@@ -637,6 +668,17 @@ async function collectMetrics(win) {
       if (!modelFile) throw new Error(name + ': el 3MF no contiene el modelo.');
       const modelXml = await zip.file(modelFile).async('string');
       const model = inspect3MFModel(modelXml);
+      const modelSettingsFile = zip.file('Metadata/model_settings.config');
+      const projectSettingsFile = zip.file('Metadata/project_settings.config');
+      const modelSettings = modelSettingsFile
+        ? new DOMParser().parseFromString(
+            await modelSettingsFile.async('string'),
+            'application/xml'
+          )
+        : null;
+      const projectSettings = projectSettingsFile
+        ? JSON.parse(await projectSettingsFile.async('string'))
+        : null;
 
       return {
         contourCount: shapeData.length,
@@ -647,6 +689,128 @@ async function collectMetrics(win) {
         invalidMeshes,
         failedExports: generated.failedCount,
         blobBytes: generated.blob.size,
+        metadataPartCount: modelSettings
+          ? modelSettings.getElementsByTagName('part').length
+          : 0,
+        metadataExtruders: modelSettings
+          ? [...modelSettings.querySelectorAll('part metadata[key="extruder"]')]
+              .map(node => node.getAttribute('value'))
+          : [],
+        filamentColors: projectSettings?.filament_colour || [],
+        filamentSettings: projectSettings?.filament_settings_id || [],
+        filamentTypes: projectSettings?.filament_type || [],
+        ...model,
+      };
+    }
+
+    async function testBeveled3MFFlow() {
+      await importThroughFileInput(dxfText, 'tucan-beveled.dxf');
+      const contourIndex = State.contours.findIndex((contour, index) =>
+        Utils.isVisibleContour(contour) &&
+        contour.depth % 2 === 0 &&
+        !State.contours.some(candidate =>
+          candidate.parentIdx === index && candidate.depth % 2 === 1
+        )
+      );
+      if (contourIndex < 0) throw new Error('No se encontro un contorno para probar bisel.');
+
+      State.extrudeMode = 'separate';
+      PanelUI.clearAllSelection();
+      PanelUI.selectOne(contourIndex, true, undefined, 'top');
+      document.getElementById('ex-depth').value = '3';
+      document.getElementById('ex-bevel').value = '0.2';
+      document.getElementById('ex-bseg').value = '3';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const generated = await Exporter.generate3MFBlob(
+        State.pieces,
+        'tucan-beveled-test'
+      );
+      const zip = await JSZip.loadAsync(generated.blob);
+      const modelXml = await zip.file('3D/3dmodel.model').async('string');
+      return {
+        pieceCount: State.pieces.length,
+        failedExports: generated.failedCount,
+        ...inspect3MFModel(modelXml),
+      };
+    }
+
+    async function testMergedLayered3MFFlow() {
+      await importThroughFileInput(dxfText, 'tucan-merged-layered.dxf');
+      State.extrudeMode = 'merged';
+      State.selectedIdxs.clear();
+      State.selectedFaces.clear();
+      State.contours.forEach((contour, index) => {
+        if (!Utils.isVisibleContour(contour) || contour.depth % 2 === 1) return;
+        contour.sel2D = true;
+        State.selectedIdxs.add(index);
+        State.selectedFaces.set(index, 'top');
+      });
+      document.getElementById('ex-depth').value = '1.5';
+      document.getElementById('ex-bevel').value = '0';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const basePiece = State.pieces[0];
+      const sourceFaceIndexes = State.contours
+        .map((contour, index) => ({ contour, index }))
+        .filter(({ contour }) =>
+          !contour._isFakeContour &&
+          contour.piece === basePiece &&
+          contour.depth % 2 === 0
+        )
+        .map(({ index }) => index);
+
+      PanelUI.clearAllSelection();
+      State.extrudeMode = 'separate';
+      sourceFaceIndexes.forEach(index => {
+        const contour = State.contours[index];
+        contour.sel2D = true;
+        State.selectedIdxs.add(index);
+        State.selectedFaces.set(index, 'top');
+      });
+      document.getElementById('ex-depth').value = '1.5';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const generated = await Exporter.generate3MFBlob(
+        State.pieces,
+        'tucan-merged-layered-test'
+      );
+      const zip = await JSZip.loadAsync(generated.blob);
+      const modelXml = await zip.file('3D/3dmodel.model').async('string');
+      const model = inspect3MFModel(modelXml);
+      const modelSettingsText = await zip
+        .file('Metadata/model_settings.config')
+        .async('string');
+      const modelSettings = new DOMParser().parseFromString(
+        modelSettingsText,
+        'application/xml'
+      );
+      const projectSettings = JSON.parse(
+        await zip.file('Metadata/project_settings.config').async('string')
+      );
+
+      const bytes = new Uint8Array(await generated.blob.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      globalThis.__inkoraMerged3MFBase64 = btoa(binary);
+
+      return {
+        basePieceCount: 1,
+        sourceFaceCount: sourceFaceIndexes.length,
+        pieceCount: State.pieces.length,
+        failedExports: generated.failedCount,
+        blobBytes: generated.blob.size,
+        metadataPartCount: modelSettings.getElementsByTagName('part').length,
+        metadataExtruders: [...modelSettings.querySelectorAll('part metadata[key="extruder"]')]
+          .map(node => node.getAttribute('value')),
+        filamentColors: projectSettings.filament_colour || [],
+        filamentSettings: projectSettings.filament_settings_id || [],
+        filamentTypes: projectSettings.filament_type || [],
         ...model,
       };
     }
@@ -665,6 +829,8 @@ async function collectMetrics(win) {
       svg: summarize(await SVGParser.loadText(svgText)),
       dxfFlow: await testFullFlow(DXFParser, dxfText, 'tucan-dxf-test'),
       svgFlow: await testFullFlow(SVGParser, svgText, 'tucan-svg-test'),
+      beveled3MF: await testBeveled3MFFlow(),
+      mergedLayered3MF: await testMergedLayered3MFFlow(),
       undoRedo: await testUndoRedoExtrusion(),
       threeDFaceUndoRedoSeparate: await test3DFaceUndoRedo('separate'),
       threeDFaceUndoRedoMerged: await test3DFaceUndoRedo('merged'),
@@ -744,6 +910,88 @@ async function captureVisuals(win) {
   return captures;
 }
 
+async function writeMerged3MFFixture(win) {
+  const base64 = await win.webContents.executeJavaScript(
+    'globalThis.__inkoraMerged3MFBase64 || ""'
+  );
+  if (!base64) throw new Error('No se genero el fixture 3MF unido.');
+  const outputDir = path.join(app.getPath('temp'), 'inkora-geometry-tests');
+  await fs.promises.mkdir(outputDir, { recursive: true });
+  const fixturePath = path.join(outputDir, 'tucan-merged-layered.3mf');
+  await fs.promises.writeFile(fixturePath, Buffer.from(base64, 'base64'));
+  return fixturePath;
+}
+
+function inspectWithBambuStudio(fixturePath) {
+  if (process.platform !== 'win32') return { available: false };
+  const executable = 'C:\\Program Files\\Bambu Studio\\bambu-studio.exe';
+  if (!fs.existsSync(executable)) return { available: false };
+
+  const cwd = path.dirname(fixturePath);
+  const infoResult = spawnSync(
+    executable,
+    ['--info', '--debug', '4', fixturePath],
+    {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 120000,
+      maxBuffer: 16 * 1024 * 1024,
+    }
+  );
+  const output = `${infoResult.stdout || ''}\n${infoResult.stderr || ''}`;
+  fs.writeFileSync(path.join(cwd, 'bambu-info.log'), output, 'utf8');
+  if (infoResult.error) throw infoResult.error;
+  if (infoResult.status !== 0) {
+    throw new Error(`Bambu Studio --info termino con codigo ${infoResult.status}.`);
+  }
+
+  const values = pattern => [...output.matchAll(pattern)].map(match => Number(match[1]));
+  const nonManifoldEdges = values(/non_manifold_edges\s*=\s*(\d+)/gi);
+  const openEdges = values(/open_edges\s*=\s*(\d+)/gi);
+  const assembled = output.match(/begin to assemble objects,\s*size\s*(\d+)/i);
+  const sliceDir = path.join(cwd, `bambu-slice-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(sliceDir, { recursive: true });
+  const sliceResult = spawnSync(
+    executable,
+    ['--slice', '0', '--debug', '4', '--outputdir', sliceDir, fixturePath],
+    {
+      cwd,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 120000,
+      maxBuffer: 16 * 1024 * 1024,
+    }
+  );
+  const sliceOutput = `${sliceResult.stdout || ''}\n${sliceResult.stderr || ''}`;
+  fs.writeFileSync(path.join(sliceDir, 'bambu-slice.log'), sliceOutput, 'utf8');
+  if (sliceResult.error) throw sliceResult.error;
+  if (sliceResult.status !== 0) {
+    throw new Error(`Bambu Studio --slice termino con codigo ${sliceResult.status}.`);
+  }
+  const resultPath = path.join(sliceDir, 'result.json');
+  if (!fs.existsSync(resultPath)) {
+    throw new Error('Bambu Studio no genero result.json al laminar.');
+  }
+  const sliceReport = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+  const slicedPlate = sliceReport.sliced_plates?.[0];
+  const gcodePath = path.join(sliceDir, 'plate_1.gcode');
+
+  return {
+    available: true,
+    assembledObjectCount: assembled ? Number(assembled[1]) : null,
+    nonManifoldEdges: nonManifoldEdges.reduce((sum, value) => sum + value, 0),
+    openEdges: openEdges.reduce((sum, value) => sum + value, 0),
+    manifoldFailures: (output.match(/manifold\s*=\s*no/gi) || []).length,
+    treatedAsOtherVendor: /3mf from other vendor/i.test(output),
+    sliceReturnCode: sliceReport.return_code,
+    slicedObjectCount: slicedPlate?.objects?.length || 0,
+    slicedTriangleCount: slicedPlate?.triangle_count || 0,
+    sliceWarning: slicedPlate?.warning_message || '',
+    gcodeBytes: fs.existsSync(gcodePath) ? fs.statSync(gcodePath).size : 0,
+  };
+}
+
 function nearlyEqual(a, b, tolerance) {
   return Math.abs(a - b) <= tolerance;
 }
@@ -775,8 +1023,74 @@ function validate(metrics) {
     if (flow.invalidMeshes) failures.push(`${format.toUpperCase()}: ${flow.invalidMeshes} mallas inválidas`);
     if (flow.failedExports) failures.push(`${format.toUpperCase()}: ${flow.failedExports} piezas fallaron al exportar`);
     if (flow.objectCount !== flow.pieceCount) failures.push(`${format.toUpperCase()}: el 3MF contiene ${flow.objectCount} objetos para ${flow.pieceCount} piezas`);
+    if (flow.componentObjectCount !== 1 ||
+        flow.rootComponentCount !== flow.pieceCount ||
+        flow.buildItemCount !== 1) {
+      failures.push(`${format.toUpperCase()}: el 3MF no contiene una unica raiz multipartes`);
+    }
+    if (flow.metadataPartCount !== flow.pieceCount ||
+        flow.metadataExtruders.length !== flow.pieceCount ||
+        flow.metadataExtruders.some(value =>
+          Number(value) < 1 || Number(value) > flow.colorCount
+        )) {
+      failures.push(`${format.toUpperCase()}: faltan asignaciones de extrusor por volumen`);
+    }
+    if (flow.filamentColors.length !== flow.colorCount ||
+        flow.filamentSettings.length !== flow.colorCount ||
+        flow.filamentTypes.length !== flow.colorCount) {
+      failures.push(`${format.toUpperCase()}: la paleta de Bambu no coincide con los materiales 3MF`);
+    }
     if (!flow.triangleCount) failures.push(`${format.toUpperCase()}: el 3MF no contiene triángulos`);
     if (flow.nonManifoldEdges) failures.push(`${format.toUpperCase()}: el 3MF contiene ${flow.nonManifoldEdges} aristas no manifold`);
+    if (flow.inconsistentWindingEdges) {
+      failures.push(`${format.toUpperCase()}: el 3MF contiene ${flow.inconsistentWindingEdges} aristas con winding inconsistente`);
+    }
+    if (flow.nonPositiveVolumes) {
+      failures.push(`${format.toUpperCase()}: el 3MF contiene ${flow.nonPositiveVolumes} volumenes no positivos`);
+    }
+  }
+  const beveled = metrics.beveled3MF;
+  if (beveled.pieceCount !== 1 ||
+      beveled.failedExports ||
+      beveled.objectCount !== 1 ||
+      beveled.componentObjectCount !== 1 ||
+      beveled.rootComponentCount !== 1 ||
+      beveled.buildItemCount !== 1 ||
+      beveled.nonManifoldEdges ||
+      beveled.inconsistentWindingEdges ||
+      beveled.nonPositiveVolumes) {
+    failures.push('una pieza biselada no conserva una malla 3MF manifold');
+  }
+  const merged = metrics.mergedLayered3MF;
+  if (merged.basePieceCount !== 1 || merged.pieceCount !== merged.sourceFaceCount + 1) {
+    failures.push('el flujo unido y re-extruido no conserva la cantidad esperada de volumenes');
+  }
+  if (merged.failedExports ||
+      merged.objectCount !== merged.pieceCount ||
+      merged.componentObjectCount !== 1 ||
+      merged.rootComponentCount !== merged.pieceCount ||
+      merged.buildItemCount !== 1 ||
+      merged.metadataPartCount !== merged.pieceCount ||
+      merged.metadataExtruders.length !== merged.pieceCount ||
+      merged.metadataExtruders.some(value =>
+        Number(value) < 1 || Number(value) > merged.colorCount
+      )) {
+    failures.push('el tucan unido y por capas no se exporta como un unico modelo multipartes');
+  }
+  if (merged.colorCount !== 3 ||
+      merged.filamentColors.length !== 3 ||
+      merged.filamentSettings.length !== 3 ||
+      merged.filamentTypes.length !== 3) {
+    failures.push('el tucan unido no conserva sus tres materiales');
+  }
+  if (merged.nonManifoldEdges ||
+      merged.inconsistentWindingEdges ||
+      merged.nonPositiveVolumes) {
+    failures.push(
+      `el tucan unido exporta topologia invalida ` +
+      `(non-manifold ${merged.nonManifoldEdges}, winding ${merged.inconsistentWindingEdges}, ` +
+      `volumen ${merged.nonPositiveVolumes})`
+    );
   }
   const history = metrics.undoRedo;
   if (JSON.stringify(history.initialFlat) !== JSON.stringify(history.afterUndoFlat)) {
@@ -889,11 +1203,28 @@ app.whenReady().then(async () => {
       throw new Error(`Errores de consola:\n${pageErrors.join('\n')}`);
     }
     validate(metrics);
+    const mergedFixture = await writeMerged3MFFixture(win);
+    const bambu = inspectWithBambuStudio(mergedFixture);
+    console.log(`Bambu Studio inspection:\n${JSON.stringify(bambu, null, 2)}`);
+    if (bambu.available &&
+        (bambu.assembledObjectCount !== 1 ||
+         bambu.nonManifoldEdges !== 0 ||
+         bambu.openEdges !== 0 ||
+         bambu.manifoldFailures !== 0 ||
+         bambu.sliceReturnCode !== 0 ||
+         bambu.slicedObjectCount !== 1 ||
+         bambu.slicedTriangleCount !== metrics.mergedLayered3MF.triangleCount ||
+         bambu.gcodeBytes === 0)) {
+      throw new Error(
+        `Bambu Studio rechazo o lamino mal el fixture:\n${JSON.stringify(bambu, null, 2)}`
+      );
+    }
     const captures = await captureVisuals(win);
     console.log(`Visual captures:\n${captures.join('\n')}`);
     console.log('Geometry regression: OK');
     app.exit(0);
   } catch (err) {
+    if (pageErrors.length) console.error(`Renderer errors:\n${pageErrors.join('\n')}`);
     console.error(err.stack || err);
     app.exit(1);
   }

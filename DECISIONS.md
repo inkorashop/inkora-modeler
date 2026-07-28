@@ -1328,3 +1328,68 @@ focus o zoom amortiguado pendiente. El atajo `F` conserva el encuadre manual.
 El delta de camara es `0` y todos los ciclos conservan firmas geometricas
 identicas. Las pruebas DXF/SVG y 3MF de `v1.0.4` siguen pasando sin cambios.
 Version HTML/Electron: `1.0.5`.
+
+## 2026-07-28 -- v1.0.6: 3MF multipartes manifold para Bambu Studio
+
+### Sintoma y diagnostico
+
+El Tucan se veia oscurecido o con colores mezclados al abrir el 3MF y se
+separaba incorrectamente al laminar. No era un problema de iluminacion: el
+archivo exportado contenia mallas superpuestas y topologia invalida. La pieza
+base tenia aristas abiertas/no-manifold y multiples componentes internos.
+
+La investigacion se hizo desde cuatro fuentes, en este orden:
+
+1. hechos confirmados del diseno por capas en Corel;
+2. DXF y SVG originales de `Modelos/`;
+3. inspeccion del 3MF defectuoso por indices, aristas y volumen firmado;
+4. especificacion 3MF y codigo/importador de Bambu Studio.
+
+Esto evito volver a atribuir el problema a contornos duplicados de Corel. La
+causa estaba despues de la importacion: el modo unido conservaba shapes
+superpuestos y el exportador tenia una reconstruccion distinta de la malla
+mostrada, con supuestos incorrectos sobre indices y soldado de vertices.
+
+### Solucion geometrica
+
+- `Solid2D` crea un solido canonico antes de triangular mediante union
+  incremental de Clipper en espacio entero.
+- Viewport y exportador comparten ese mismo conjunto de poligonos.
+- Un contacto exacto entre un hueco y su borde se regulariza localmente con
+  el menor paso de grilla que produce un interior estricto. No se aplica
+  offset global ni se altera una frontera que ya es valida.
+- Las extrusiones sin bisel se exportan como prismas indexados: tapas y
+  laterales comparten indices dentro de cada anillo, pero dos anillos que solo
+  coinciden geometricamente no se sueldan por accidente.
+- Las piezas biseladas conservan la malla renderizada con un soldado de
+  tolerancia estricta.
+- Antes de escribir el archivo se eliminan triangulos degenerados/duplicados,
+  se orienta cada componente, se exige volumen positivo y se rechaza cualquier
+  arista usada por una cantidad distinta de dos caras. La exportacion falla
+  completa si una pieza no cumple.
+
+### Estructura y materiales
+
+El 3MF contiene un objeto mesh por pieza, una unica raiz de componentes y un
+solo `build item`. Los colores se deduplican en un `colorgroup` y cada volumen
+conserva su `pindex` y su extrusor correspondiente. La metadata adicional
+describe nombres, extrusores y una paleta PLA portatil, sin fingir que el
+archivo fue creado por Bambu Studio ni fijar una impresora concreta.
+
+La misma funcion `generate3MFBlob()` alimenta tanto `Exportar 3MF` como
+`Abrir en Bambu Studio`, por lo que no existen dos exportadores divergentes.
+
+### Regresion
+
+`npm run test:geometry` ahora comprueba:
+
+- DXF y SVG separados;
+- una pieza con bisel;
+- el Tucan unido como base y re-extruido por capas;
+- raiz unica, cantidad de volumenes, colores y extrusores;
+- aristas manifold, winding coherente y volumen firmado positivo;
+- inspeccion real con Bambu Studio CLI;
+- laminado real: un objeto, `5752` triangulos, sin warning y G-code generado.
+
+El fixture unido queda en `12` volumenes, `3` materiales y `5752` triangulos,
+con `0` aristas abiertas/no-manifold. Version HTML/Electron: `1.0.6`.

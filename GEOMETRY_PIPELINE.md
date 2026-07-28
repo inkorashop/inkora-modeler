@@ -267,3 +267,73 @@ ganar sobre una cara valida.
 Importar DXF/SVG no encuadra la escena. Debe preservar posicion, orientacion,
 target orbital y zoom, ademas de cancelar animaciones pendientes. El encuadre
 continua siendo una accion explicita mediante `F`.
+
+## 10. Solido canonico y contrato 3MF
+
+Desde `v1.0.6`, una pieza unida no es una lista de shapes que se extruyen en
+paralelo. Primero se transforma en un conjunto canonico de poligonos:
+
+```text
+contornos logicos
+  -> union incremental Clipper
+  -> shapes canonicos sin bordes internos duplicados
+  -> triangulacion para viewport y exportacion
+```
+
+La union es incremental porque una union masiva puede conservar segmentos
+coincidentes en la salida de ciertas composiciones. El resultado debe cumplir:
+
+- ninguna arista interna repetida;
+- ningun offset global;
+- conservacion de area salvo una regularizacion topologica localizada;
+- huecos e islas expresados por anillos, no inferidos desde triangulos.
+
+Un punto donde un hueco toca exactamente su exterior no representa un solido
+2-manifold extruible. `regularizeTouchingHole()` mueve solo ese vertice hacia
+el interior valido, buscando desde el paso minimo de la grilla. No debe
+aplicarse a huecos separados ni convertirse en una tolerancia general.
+
+### Contrato de malla exportada
+
+Cada mesh del 3MF debe cumplir antes de serializar:
+
+1. todo triangulo tiene tres indices distintos y area no nula;
+2. no existen triangulos duplicados;
+3. cada arista por indices aparece exactamente dos veces;
+4. los dos usos de una arista tienen direccion opuesta;
+5. cada componente conectado tiene volumen firmado positivo.
+
+La coincidencia de coordenadas no basta para definir identidad topologica.
+Dos anillos que tocan un punto pueden usar coordenadas iguales y vertices con
+indices distintos. Soldarlos globalmente crea una arista o vertice
+no-manifold.
+
+### Contrato multipartes y color
+
+Un modelo multicolor se escribe como:
+
+- un objeto mesh por volumen;
+- un unico objeto raiz con componentes;
+- un unico item en `build`;
+- un `colorgroup` con colores unicos;
+- `pid/pindex` por volumen;
+- metadata de nombre/extrusor y arrays de paleta con igual longitud.
+
+INKORA se conserva como `Application`. No usar el prefijo `BambuStudio-`:
+Bambu lo interpreta como proyecto nativo y espera perfiles completos de
+maquina, proceso, placa y filamentos. Inventar esa identidad crea archivos
+fragiles. Un 3MF estandar debe dejar que Bambu use los perfiles locales.
+
+### Regresion externa
+
+Cuando Bambu Studio esta instalado, `npm run test:geometry` ejecuta tambien:
+
+```powershell
+bambu-studio --info fixture.3mf
+bambu-studio --slice 0 --outputdir <temp> fixture.3mf
+```
+
+La prueba exige una sola raiz ensamblada, cero aristas abiertas/no-manifold,
+un unico objeto laminado, la misma cantidad de triangulos que el 3MF y G-code
+no vacio. Los materiales se comprueban en el XML y la metadata porque el CLI
+headless no presenta el dialogo de conversion de colores del flujo grafico.

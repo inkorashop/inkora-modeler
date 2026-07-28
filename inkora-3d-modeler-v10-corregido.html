@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.5">
+<meta name="inkora-version" content="1.0.6">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -629,7 +629,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.5</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.6</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -802,7 +802,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.5').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.6').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -2023,6 +2023,222 @@ const WindingUtils = (() => {
     return p;
   }
   return { isShapeCCW, copyCurves, makeShapeCCW, makeHoleCW };
+})();
+
+/* Canonical 2D solids shared by viewport extrusion and 3MF export.
+   Clipper performs the boolean work in integer space; no offset or clearance
+   is introduced. A logical merged piece therefore becomes one polygon set
+   before it is ever triangulated. */
+const Solid2D = (() => {
+  const SCALE = 10000;
+  const CURVE_SEGMENTS = 64;
+
+  function stripClosingPoint(points) {
+    const clean = (points || [])
+      .filter(point => Number.isFinite(+point.x) && Number.isFinite(+point.y))
+      .map(point => ({ x: +point.x, y: +point.y }));
+    if (clean.length > 1) {
+      const first = clean[0];
+      const last = clean[clean.length - 1];
+      if (Math.abs(first.x - last.x) < 1e-8 &&
+          Math.abs(first.y - last.y) < 1e-8) clean.pop();
+    }
+    return clean;
+  }
+
+  function toClipperPath(points, positive, lib) {
+    const source = stripClosingPoint(points);
+    const path = [];
+    source.forEach(point => {
+      const next = {
+        X: Math.round(point.x * SCALE),
+        Y: Math.round(point.y * SCALE),
+      };
+      const previous = path[path.length - 1];
+      if (!previous || previous.X !== next.X || previous.Y !== next.Y) path.push(next);
+    });
+    if (path.length > 1 &&
+        path[0].X === path[path.length - 1].X &&
+        path[0].Y === path[path.length - 1].Y) path.pop();
+    if (path.length < 3 || Math.abs(lib.Clipper.Area(path)) < 1) return null;
+    if (lib.Clipper.Orientation(path) !== positive) path.reverse();
+    return path;
+  }
+
+  function shapeFromClipperPath(path) {
+    const points = (path || []).map(point => ({
+      x: point.X / SCALE,
+      y: point.Y / SCALE,
+    }));
+    const shape = new THREE.Shape();
+    if (points.length < 3) return shape;
+    shape.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) shape.lineTo(points[i].x, points[i].y);
+    shape.closePath();
+    shape.autoClose = true;
+    return WindingUtils.makeShapeCCW(shape);
+  }
+
+  function holeFromClipperPath(path) {
+    const asShape = shapeFromClipperPath(path);
+    return WindingUtils.makeHoleCW(asShape);
+  }
+
+  function nodeChildren(node) {
+    if (typeof node?.Childs === 'function') return node.Childs();
+    return node?.m_Childs || [];
+  }
+
+  function nodeContour(node) {
+    if (typeof node?.Contour === 'function') return node.Contour();
+    return node?.m_polygon || [];
+  }
+
+  function regularizeTouchingHole(outerPath, holePath, occupiedPoints, lib) {
+    const original = holePath.map(point => ({ X: point.X, Y: point.Y }));
+    const adjusted = original.map(point => ({ X: point.X, Y: point.Y }));
+    const outer = outerPath || [];
+
+    adjusted.forEach((point, index) => {
+      const key = `${point.X},${point.Y}`;
+      if (!occupiedPoints.has(key)) return;
+
+      let replacement = null;
+      const previous = original[(index - 1 + original.length) % original.length];
+      const next = original[(index + 1) % original.length];
+      const centroid = original.reduce(
+        (sum, candidate) => ({ X: sum.X + candidate.X, Y: sum.Y + candidate.Y }),
+        { X: 0, Y: 0 }
+      );
+      centroid.X /= original.length;
+      centroid.Y /= original.length;
+      const targets = [
+        centroid,
+        { X: (previous.X + next.X) / 2, Y: (previous.Y + next.Y) / 2 },
+      ];
+      for (const target of targets) {
+        const vx = target.X - point.X;
+        const vy = target.Y - point.Y;
+        const length = Math.hypot(vx, vy);
+        if (length < 1) continue;
+        for (let distance = 1; distance <= Math.min(1000, length); distance++) {
+          const candidate = {
+            X: Math.round(point.X + vx * distance / length),
+            Y: Math.round(point.Y + vy * distance / length),
+          };
+          const candidateKey = `${candidate.X},${candidate.Y}`;
+          if (candidateKey === key || occupiedPoints.has(candidateKey)) continue;
+          if (lib.Clipper.PointInPolygon(candidate, original) !== 1) continue;
+          if (lib.Clipper.PointInPolygon(candidate, outer) !== 1) continue;
+          replacement = candidate;
+          break;
+        }
+        if (replacement) break;
+      }
+      for (let radius = 1; radius <= 32 && !replacement; radius++) {
+        for (let dx = -radius; dx <= radius && !replacement; dx++) {
+          for (let dy = -radius; dy <= radius; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+            const candidate = { X: point.X + dx, Y: point.Y + dy };
+            const candidateKey = `${candidate.X},${candidate.Y}`;
+            if (occupiedPoints.has(candidateKey)) continue;
+            if (lib.Clipper.PointInPolygon(candidate, original) !== 1) continue;
+            if (lib.Clipper.PointInPolygon(candidate, outer) !== 1) continue;
+            replacement = candidate;
+            break;
+          }
+        }
+      }
+      if (!replacement) {
+        throw new Error(
+          `No se pudo regularizar el contacto puntual del hueco en ${key}.`
+        );
+      }
+      adjusted[index] = replacement;
+    });
+
+    adjusted.forEach(point => occupiedPoints.add(`${point.X},${point.Y}`));
+    return adjusted;
+  }
+
+  function unionShapes(shapes) {
+    const sourceShapes = (shapes || []).filter(shape => shape?.curves?.length);
+    if (!sourceShapes.length) return [];
+
+    const lib = globalThis.ClipperLib;
+    if (!lib?.Clipper || !lib?.PolyTree || !lib?.ClipType || !lib?.PolyFillType) {
+      if (sourceShapes.length === 1) return sourceShapes;
+      throw new Error('Clipper no esta disponible para consolidar la pieza unida.');
+    }
+
+    const shapePaths = sourceShapes.map(shape => {
+      const paths = [];
+      const outer = toClipperPath(shape.getPoints(CURVE_SEGMENTS), true, lib);
+      if (outer) paths.push(outer);
+      (shape.holes || []).forEach(hole => {
+        const inner = toClipperPath(hole.getPoints(CURVE_SEGMENTS), false, lib);
+        if (inner) paths.push(inner);
+      });
+      return paths;
+    }).filter(paths => paths.length);
+    if (!shapePaths.length) return [];
+
+    let tree = null;
+    let accumulated = [];
+    shapePaths.forEach((nextPaths, index) => {
+      const clipper = new lib.Clipper();
+      clipper.StrictlySimple = true;
+      clipper.PreserveCollinear = false;
+      if (accumulated.length) {
+        clipper.AddPaths(accumulated, lib.PolyType.ptSubject, true);
+        clipper.AddPaths(nextPaths, lib.PolyType.ptClip, true);
+      } else {
+        clipper.AddPaths(nextPaths, lib.PolyType.ptSubject, true);
+      }
+      tree = new lib.PolyTree();
+      const ok = clipper.Execute(
+        lib.ClipType.ctUnion,
+        tree,
+        lib.PolyFillType.pftNonZero,
+        lib.PolyFillType.pftNonZero
+      );
+      if (!ok) {
+        throw new Error(`No se pudo consolidar la region 2D ${index + 1}.`);
+      }
+      accumulated = lib.Clipper.PolyTreeToPaths(tree);
+    });
+
+    const solids = [];
+    function addOuter(node) {
+      const contour = nodeContour(node);
+      if (contour.length < 3) return;
+      const shape = shapeFromClipperPath(contour);
+      const children = nodeChildren(node);
+      const occupiedPoints = new Set(
+        contour.map(point => `${point.X},${point.Y}`)
+      );
+      children.forEach(child => {
+        const rawHole = nodeContour(child);
+        if (rawHole.length < 3) return;
+        const hole = regularizeTouchingHole(
+          contour,
+          rawHole,
+          occupiedPoints,
+          lib
+        );
+        shape.holes.push(holeFromClipperPath(hole));
+      });
+      solids.push(shape);
+      children.forEach(holeNode => {
+        nodeChildren(holeNode).forEach(islandNode => addOuter(islandNode));
+      });
+    }
+    nodeChildren(tree).forEach(node => addOuter(node));
+    if (!solids.length) throw new Error('La union 2D produjo una pieza vacia.');
+    return solids;
+  }
+
+  return { unionShapes };
 })();
 
 const SVGVisibleGeometry = (() => {
@@ -3293,14 +3509,18 @@ const GeoModule = (() => {
     const extrudeOpts = {
       steps: 1,
       depth: absDepth,
+      // Solid2D already discretizes curves before Clipper. Its result is a
+      // polyline, so subdividing every line again creates duplicate topology.
+      curveSegments: 1,
       bevelEnabled: safeBevel > 0,
       bevelThickness: safeBevel,
       bevelSize: safeBevel * 0.75,
       bevelSegments: bevelSeg,
     };
 
-    const allShapes = extraShapes.length > 0 ? [shape, ...extraShapes] : [shape];
-    const geo = new THREE.ExtrudeGeometry(allShapes, extrudeOpts);
+    const outlineShapes = extraShapes.length > 0 ? [shape, ...extraShapes] : [shape];
+    const solidShapes = Solid2D.unionShapes(outlineShapes);
+    const geo = new THREE.ExtrudeGeometry(solidShapes, extrudeOpts);
     geo.computeVertexNormals();
     _pieceCounter++;
 
@@ -3320,6 +3540,7 @@ const GeoModule = (() => {
     });
 
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData._solidShapes = solidShapes;
     mesh.castShadow    = true;
     mesh.receiveShadow = true;
 
@@ -3395,7 +3616,9 @@ const GeoModule = (() => {
         });
       });
     }
-    allShapes.forEach(sh => addShapeOutline(sh));
+    // El solido usa la union canonica; los contornos logicos originales se
+    // conservan solo para dibujo y picking de sub-caras.
+    outlineShapes.forEach(sh => addShapeOutline(sh));
 
     return mesh;
   }
@@ -3472,35 +3695,11 @@ const GeoModule = (() => {
 })();
 
 
-/* ══════════════════════════════════════════════════════
-   MÓDULO 4 — EXPORTACIÓN 3MF  (v10 — Geometría Sólida)
-   Spec: 3D Manufacturing Format Core 1.3 +
-         Materials and Properties Extension 1.2
-
-   Estrategia (causa raíz resuelta):
-   ─────────────────────────────────────────────────────
-   • En lugar de exportar la geometría de render de Three.js
-     (que tiene vértices duplicados y bordes non-manifold),
-     se RECONSTRUYE cada pieza desde sus datos fuente:
-     shape 2D + profundidad + posición.
-
-   • Reconstrucción manifold garantizada:
-     1. Se triangula el shape 2D con earcut (incluido en Three.js)
-     2. Se generan las caras laterales con vértices COMPARTIDOS
-        entre cara superior, cara inferior y laterales.
-     3. Todos los vértices de la malla final son únicos y cada
-        arista pertenece exactamente a dos triángulos → manifold.
-
-   • Detección de apilado:
-     - Piezas cuya base (minZ en 3MF) ≈ tope (maxZ) de otra
-       se marcan como "apiladas" y se exportan con un offset Z
-       exacto (sin EPS anti-zfight que existía solo para render).
-
-   • Piezas al mismo nivel → objetos separados → multicolor OK.
-
-   • Corrección de ejes: Three.js Y-up → 3MF Z-up.
-     x'=x, y'=-z, z'=y  (sin inversión de winding)
-   ══════════════════════════════════════════════════════ */
+/* MODULE 4 - 3MF EXPORT
+   The canonical 2D solid feeds an indexed prism for straight extrusions.
+   Beveled pieces use the rendered mesh with strict coordinate welding. Every
+   mesh is checked for closed edges, coherent winding and positive volume.
+   A multicolor model is serialized as one multipart root and one build item. */
 const Exporter = (() => {
 
   /* ── hexFromPiece ───────────────────────────────────────────────────────
@@ -3511,237 +3710,6 @@ const Exporter = (() => {
     return raw.length === 6 ? raw : 'c8c8d0';
   }
 
-  /* ── buildManifoldMesh ──────────────────────────────────────────────────
-     Construye una malla 3D manifold perfecta a partir de un THREE.Shape
-     y una profundidad, en espacio 3MF (Z-up).
-
-     La malla tiene:
-       - Cara inferior (Z = baseZ): triángulos CCW vistos desde -Z
-       - Cara superior (Z = baseZ + depth): triángulos CCW vistos desde +Z
-       - Caras laterales: quads (2 triángulos cada uno) que conectan
-         el perímetro inferior con el superior.
-
-     Todos los vértices del perímetro son COMPARTIDOS entre cara superior,
-     cara inferior y laterales → garantiza manifold (cada arista tiene
-     exactamente 2 triángulos adyacentes).
-
-     Parámetros (en espacio Three.js world, se convierten a 3MF aquí):
-       shape  : THREE.Shape
-       baseY  : Y world mínimo de la pieza (= Z 3MF mínimo)
-       topY   : Y world máximo (= baseY + depth)
-       offX   : offset X del mesh en world-space
-       offZ   : offset Z del mesh en world-space (= -offY de la shape)
-       extraShapes: [THREE.Shape] para islas internas (como en ExtrudeGeometry)
-
-     Retorna: { vertices: Float32Array, indices: Uint32Array }
-     en espacio 3MF listo para serializar.
-  ─────────────────────────────────────────────────────────────────────── */
-  function buildManifoldMesh(shape, baseY, topY, offX, offZ, extraShapes = []) {
-    const depth3mf = topY - baseY;   // altura en mm, positiva
-    const baseZ3mf = baseY;           // Z 3MF de la cara inferior
-    const topZ3mf  = topY;            // Z 3MF de la cara superior
-
-    const allShapes = [shape, ...extraShapes];
-
-    // ── 1. Recopilar puntos del perímetro exterior + huecos ──────────────
-    // Usamos getPoints() de Three.js para discretizar el shape (ya resuelve
-    // curvas de Bézier en segmentos lineales con buena resolución).
-    const CURVE_SEGS = 64; // segmentos por curva (alta resolución)
-
-    // Extraer contornos de todos los shapes (exterior + holes de cada uno)
-    const contours = []; // [{pts:[{x,y}], isHole:bool}]
-
-    allShapes.forEach(sh => {
-      // Contorno exterior del shape
-      const outerPts = sh.getPoints(CURVE_SEGS);
-      contours.push({ pts: outerPts, isHole: false });
-
-      // Huecos del shape (caritas de letras como A, O, etc.)
-      sh.holes.forEach(hole => {
-        const holePts = hole.getPoints(CURVE_SEGS);
-        contours.push({ pts: holePts, isHole: true });
-      });
-    });
-
-    // ── 2. Triangular la cara 2D usando ShapeUtils de Three.js ──────────
-    // Three.js incluye earcut internamente vía THREE.ShapeUtils.triangulateShape
-    // que acepta el shape directamente y maneja huecos correctamente.
-    // Resultado: array de triángulos [[v0,v1,v2], ...] con índices en el
-    // array plano de puntos que ThreeJS genera internamente.
-
-    // Usamos la API de ShapeGeometry para obtener la triangulación
-    // sin crear un mesh de render completo.
-    const allShapesForGeo = allShapes;
-    const tempGeo = new THREE.ShapeGeometry(allShapesForGeo);
-
-    // ShapeGeometry genera una geometría indexada. Extraemos posición e índices.
-    const pos2D = tempGeo.attributes.position;
-    const idx2D = tempGeo.index;
-
-    const nVerts2D = pos2D.count;
-    const nTris2D  = idx2D ? idx2D.count / 3 : Math.floor(nVerts2D / 3);
-    function triIndex(t, corner) {
-      return idx2D ? idx2D.getX(t * 3 + corner) : (t * 3 + corner);
-    }
-
-    // ── 3. Construir la malla 3D manifold ────────────────────────────────
-    //
-    // Layout de vértices:
-    //   [0 .. nVerts2D-1]           : cara inferior (Z = baseZ3mf)
-    //   [nVerts2D .. 2*nVerts2D-1]  : cara superior (Z = topZ3mf)
-    //
-    // Las caras laterales usan los mismos vértices (compartidos).
-    //
-    // Conversión de coordenadas Three.js → 3MF:
-    //   Vertex 2D en shape: (x_shape, y_shape)
-    //   En world-space Three.js: x_world = x_shape - offX
-    //                            z_world = -(y_shape) + offZ  (tras rotation.x=-PI/2)
-    //   En 3MF (Z-up):           x_3mf = x_world = x_shape - offX
-    //                            y_3mf = -z_world = y_shape - offZ  [nota: se simplifica]
-    //                            z_3mf = baseZ o topZ
-
-    const totalVerts = nVerts2D * 2;
-    const verts = new Float32Array(totalVerts * 3);
-
-    // Cara inferior (índices 0..nVerts2D-1)
-    // Cara superior (índices nVerts2D..2*nVerts2D-1)
-    for (let i = 0; i < nVerts2D; i++) {
-      const sx = pos2D.getX(i); // coordenada X del shape
-      const sy = pos2D.getY(i); // coordenada Y del shape
-
-      // Se guardan las coordenadas locales del shape (sin transformar).
-      // El offset de posición y la conversión Y-up → Z-up se aplican
-      // después, en applyWorldTransformTo3MF, usando matrixWorld del
-      // mesh (más preciso que recalcular offX/offZ a mano aquí).
-
-      // Cara inferior: z_3mf = baseZ3mf
-      verts[(i)        * 3 + 0] = sx;
-      verts[(i)        * 3 + 1] = sy;
-      verts[(i)        * 3 + 2] = 0; // z local; se transforma luego
-
-      // Cara superior: z_3mf = topZ3mf (= depth en coord locales)
-      verts[(i + nVerts2D) * 3 + 0] = sx;
-      verts[(i + nVerts2D) * 3 + 1] = sy;
-      verts[(i + nVerts2D) * 3 + 2] = depth3mf; // z local; se transforma luego
-    }
-
-    // ── 4. Generar triángulos ────────────────────────────────────────────
-    // Cara inferior + cara superior + laterales
-    // Estimación conservadora de triángulos
-    const approxPerimeterPts = contours.reduce((s, c) => s + c.pts.length, 0);
-    const maxTris = nTris2D * 2 + approxPerimeterPts * 2 + 100;
-    const indices = [];
-
-    // ── 4a. Cara inferior ── (winding CW vista desde abajo = CCW desde +Z en 3MF)
-    // ShapeGeometry genera triángulos CCW vistos desde +Z.
-    // La cara inferior debe ser CCW vista desde -Z (abajo), es decir,
-    // hay que invertir el winding → (v0, v2, v1).
-    for (let t = 0; t < nTris2D; t++) {
-      const v0 = triIndex(t, 0);
-      const v1 = triIndex(t, 1);
-      const v2 = triIndex(t, 2);
-      indices.push(v0, v2, v1); // invertido
-    }
-
-    // ── 4b. Cara superior ── (misma orientación que ShapeGeometry: CCW desde +Z)
-    for (let t = 0; t < nTris2D; t++) {
-      const v0 = triIndex(t, 0) + nVerts2D;
-      const v1 = triIndex(t, 1) + nVerts2D;
-      const v2 = triIndex(t, 2) + nVerts2D;
-      indices.push(v0, v1, v2);
-    }
-
-    // ── 4c. Caras laterales ──────────────────────────────────────────────
-    // Para generar las laterales necesitamos el perímetro en orden.
-    // THREE.ShapeUtils.extractContours no existe en r128; usamos
-    // ShapeGeometry con otra estrategia: extraer los puntos del shape
-    // y generar las laterales manualmente.
-    //
-    // Necesitamos hacer un índice: shape_point → vertex_index_en_ShapeGeometry.
-    // ShapeGeometry en r128 genera los vértices en el mismo orden que
-    // Shape.extractPoints(). Usamos eso para mapear.
-    const extractedPts = shape.extractPoints(CURVE_SEGS);
-    // extractedPts = { shape: [{x,y}], holes: [[{x,y}], ...] }
-
-    // Función para encontrar el índice más cercano en pos2D dado un punto 2D
-    // (tolerancia de matching para índices)
-    function findVertIdx(px, py, startHint = 0) {
-      // Búsqueda exacta (los puntos deben coincidir por ser generados igual)
-      for (let i = 0; i < nVerts2D; i++) {
-        const dx = pos2D.getX(i) - px;
-        const dy = pos2D.getY(i) - py;
-        if (dx * dx + dy * dy < 1e-8) return i;
-      }
-      // Fallback: punto más cercano
-      let minD = Infinity, minI = 0;
-      for (let i = 0; i < nVerts2D; i++) {
-        const dx = pos2D.getX(i) - px;
-        const dy = pos2D.getY(i) - py;
-        const d = dx * dx + dy * dy;
-        if (d < minD) { minD = d; minI = i; }
-      }
-      return minI;
-    }
-
-    // Generar caras laterales para un contorno (exterior o hueco)
-    // isHole: si true, se invierte el winding de las laterales para que las normales
-    // apunten hacia el interior del hueco (correcto para manifold).
-    function addLateralFaces(pts, isHole) {
-      const n = pts.length;
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n;
-        const p0 = pts[i];
-        const p1 = pts[j];
-
-        // Buscar índices en la geometría de ShapeGeometry
-        const bot0 = findVertIdx(p0.x, p0.y);
-        const bot1 = findVertIdx(p1.x, p1.y);
-        const top0 = bot0 + nVerts2D;
-        const top1 = bot1 + nVerts2D;
-
-        if (!isHole) {
-          // Cara exterior: normal apunta hacia afuera
-          // Quad: bot0, bot1, top1, top0
-          indices.push(bot0, bot1, top1);
-          indices.push(bot0, top1, top0);
-        } else {
-          // Cara de hueco: normal apunta hacia adentro
-          indices.push(bot0, top1, bot1);
-          indices.push(bot0, top0, top1);
-        }
-      }
-    }
-
-    // Exterior del shape principal
-    addLateralFaces(extractedPts.shape, false);
-    // Huecos del shape principal
-    extractedPts.holes.forEach(holePts => addLateralFaces(holePts, true));
-
-    // Extrashapes (islas internas): exterior e huecos de cada una
-    extraShapes.forEach(sh => {
-      const shPts = sh.extractPoints(CURVE_SEGS);
-      addLateralFaces(shPts.shape, false);
-      shPts.holes.forEach(holePts => addLateralFaces(holePts, true));
-    });
-
-    tempGeo.dispose();
-
-    return {
-      localVerts: verts,      // en coord locales del shape (Z=0..depth)
-      indices: new Uint32Array(indices),
-      nVerts: totalVerts,
-      nTris: indices.length / 3,
-    };
-  }
-
-  /* ── applyWorldTransformTo3MF ───────────────────────────────────────────
-     Toma los vértices locales del shape y aplica la transformación
-     del mesh (matrixWorld) para obtener coordenadas world-space,
-     luego convierte a espacio 3MF (Y-up → Z-up).
-
-     Esto es más preciso que recalcular manualmente los offsets,
-     ya que respeta transforms del usuario (tx, ty, tz, rotY, scale).
-  ─────────────────────────────────────────────────────────────────────── */
   function applyWorldTransformTo3MF(localVerts, mesh, nVerts) {
     mesh.updateMatrixWorld(true);
     const m = mesh.matrixWorld;
@@ -3796,39 +3764,82 @@ const Exporter = (() => {
     });
   }
 
-  /* ── getPieceSourceData ─────────────────────────────────────────────────
-     Extrae datos fuente serializables para exportar desde los contornos lógicos,
-     no desde overlays/picking ni geometría visual accidental.
-  ─────────────────────────────────────────────────────────────────────── */
-  function getPieceSourceData(piece) {
-    const contour = State.contours[piece.contourIdx] || State.contours.find(c => c.piece === piece && !c._deleted);
-    if (!contour) return null;
+  function buildIndexedPrismGeometry(piece) {
+    const shapes = piece.mesh?.userData?._solidShapes;
+    if (!Array.isArray(shapes) || !shapes.length) return null;
 
-    const sourceIdxs = (piece._mergedSourceIdxs && piece._mergedSourceIdxs.length)
-      ? piece._mergedSourceIdxs.filter(i => State.contours[i] && !State.contours[i]._deleted)
-      : [State.contours.indexOf(contour)];
+    const depth = Math.abs(piece._depth || 0.1);
+    const localVertices = [];
+    const indices = [];
 
-    function shapeWithLiveHoles(srcIdx) {
-      const src = State.contours[srcIdx] || contour;
-      const sh = WindingUtils.makeShapeCCW(src.shape);
-      (piece._holeIdxs || []).forEach(hIdx => {
-        const h = State.contours[hIdx];
-        if (h && h.parentIdx === srcIdx && !h._deleted) sh.holes.push(WindingUtils.makeHoleCW(h.shape));
+    function cleanRing(path) {
+      const points = path.getPoints(1)
+        .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
+      const clean = [];
+      points.forEach(point => {
+        const previous = clean[clean.length - 1];
+        if (!previous ||
+            Math.abs(previous.x - point.x) > 1e-9 ||
+            Math.abs(previous.y - point.y) > 1e-9) {
+          clean.push(new THREE.Vector2(point.x, point.y));
+        }
       });
-      return sh;
+      if (clean.length > 1) {
+        const first = clean[0];
+        const last = clean[clean.length - 1];
+        if (Math.abs(first.x - last.x) < 1e-9 &&
+            Math.abs(first.y - last.y) < 1e-9) clean.pop();
+      }
+      return clean;
     }
 
-    const validSourceIdxs = sourceIdxs.length ? sourceIdxs : [State.contours.indexOf(contour)];
-    const shape = shapeWithLiveHoles(validSourceIdxs[0]);
-    const extraShapes = validSourceIdxs.slice(1).map(shapeWithLiveHoles);
+    shapes.forEach(shape => {
+      const outer = cleanRing(shape);
+      const holes = (shape.holes || []).map(cleanRing)
+        .filter(ring => ring.length >= 3);
+      if (outer.length < 3) return;
 
-    return {
-      shape,
-      extraShapes,
-      mesh: piece.mesh,
-      depth: piece._depth,
-      bevel: piece._bevel || 0,
-    };
+      // triangulateShape may normalize winding in place. The resulting face
+      // indexes and the rings used below therefore stay in the same order.
+      const faces = THREE.ShapeUtils.triangulateShape(outer, holes);
+      const rings = [outer, ...holes];
+      const flatPoints = rings.flat();
+      const bottomStart = localVertices.length / 3;
+      flatPoints.forEach(point => localVertices.push(point.x, point.y, 0));
+      const topStart = localVertices.length / 3;
+      flatPoints.forEach(point => localVertices.push(point.x, point.y, depth));
+
+      faces.forEach(face => {
+        const [a, b, c] = face;
+        indices.push(bottomStart + a, bottomStart + c, bottomStart + b);
+        indices.push(topStart + a, topStart + b, topStart + c);
+      });
+
+      let ringOffset = 0;
+      rings.forEach(ring => {
+        for (let i = 0; i < ring.length; i++) {
+          const next = (i + 1) % ring.length;
+          const bottomA = bottomStart + ringOffset + i;
+          const bottomB = bottomStart + ringOffset + next;
+          const topA = topStart + ringOffset + i;
+          const topB = topStart + ringOffset + next;
+          indices.push(bottomA, bottomB, topB);
+          indices.push(bottomA, topB, topA);
+        }
+        ringOffset += ring.length;
+      });
+    });
+
+    const local = new Float32Array(localVertices);
+    const world = applyWorldTransformTo3MF(
+      local,
+      piece.mesh,
+      localVertices.length / 3
+    );
+    return orientAndValidateMesh(
+      cleanMeshTriangles(world, new Uint32Array(indices)),
+      piece.name || 'Pieza'
+    );
   }
 
   /* ── collectRenderGeometry ─────────────────────────────────────────────
@@ -3839,7 +3850,10 @@ const Exporter = (() => {
     piece.mesh.updateMatrixWorld(true);
     const geo = piece.mesh.geometry.clone();
     geo.applyMatrix4(piece.mesh.matrixWorld);
-    const merged = mergeVerticesManual(geo, 5e-4);
+    // ExtrudeGeometry duplicates vertices for normals and UVs. Weld only
+    // geometrically identical coordinates; this tolerance does not alter
+    // the source polygon.
+    const merged = mergeVerticesManual(geo, 1e-6);
 
     const pos    = merged.attributes.position;
     const idxBuf = merged.index;
@@ -3868,26 +3882,20 @@ const Exporter = (() => {
       }
     }
     merged.dispose(); geo.dispose();
-    return cleanMeshTriangles(verts, indices);
+    return orientAndValidateMesh(
+      cleanMeshTriangles(verts, indices),
+      piece.name || 'Pieza'
+    );
   }
 
-  /* ── collectManifoldGeometry ────────────────────────────────────────────
-     Exporta desde datos fuente cuando no hay bisel; si hay bisel, usa fallback
-     de render porque el bisel real requiere triangulación lateral adicional.
-  ─────────────────────────────────────────────────────────────────────── */
+  /* The displayed solid and the exported solid share the same canonical
+     polygon source. This also preserves bevels and transforms without a
+     second, divergent triangulation path. */
   function collectManifoldGeometry(piece) {
-    const src = getPieceSourceData(piece);
-    if (!src) return collectRenderGeometry(piece);
-
-    // Sin bisel: reconstrucción sólida desde shape + holes + extraShapes.
-    if (Math.abs(src.bevel || 0) < 1e-6) {
-      const absDepth = Math.abs(src.depth || 0.1);
-      const local = buildManifoldMesh(src.shape, 0, absDepth, 0, 0, src.extraShapes || []);
-      const verts = applyWorldTransformTo3MF(local.localVerts, src.mesh, local.nVerts);
-      return cleanMeshTriangles(verts, local.indices);
+    if (Math.abs(piece._bevel || 0) < 1e-9) {
+      const indexed = buildIndexedPrismGeometry(piece);
+      if (indexed) return indexed;
     }
-
-    // Con bisel: conserva geometría biselada renderizada, pero sin reparación agresiva.
     return collectRenderGeometry(piece);
   }
 
@@ -3955,18 +3963,184 @@ const Exporter = (() => {
       cleanTris.push(a, b, c);
     }
 
+    const remap = new Map();
+    const compactVerts = [];
+    const compactTris = cleanTris.map(index => {
+      if (!remap.has(index)) {
+        remap.set(index, compactVerts.length / 3);
+        compactVerts.push(
+          verts[index * 3],
+          verts[index * 3 + 1],
+          verts[index * 3 + 2]
+        );
+      }
+      return remap.get(index);
+    });
+
     return {
-      verts: new Float32Array(verts),
-      indices: new Uint32Array(cleanTris),
-      nVerts: verts.length / 3,
-      nTris: cleanTris.length / 3,
+      verts: new Float32Array(compactVerts),
+      indices: new Uint32Array(compactTris),
+      nVerts: compactVerts.length / 3,
+      nTris: compactTris.length / 3,
     };
   }
 
-  /* ── serializeObject ────────────────────────────────────────────────────
-     Genera el XML 3MF para una pieza (colorgroup + object).
-  ─────────────────────────────────────────────────────────────────────── */
-  function serializeObject(objId, cgId, hex, name, verts, indices, nVerts, nTris) {
+  function orientAndValidateMesh(mesh, name) {
+    if (!mesh?.nVerts || !mesh?.nTris) {
+      throw new Error(`${name}: la malla esta vacia.`);
+    }
+
+    const triangles = Array.from(mesh.indices);
+    const edgeUses = new Map();
+    const edgeKey = (a, b) => a < b ? `${a}:${b}` : `${b}:${a}`;
+
+    for (let tri = 0; tri < mesh.nTris; tri++) {
+      const refs = [
+        triangles[tri * 3],
+        triangles[tri * 3 + 1],
+        triangles[tri * 3 + 2],
+      ];
+      for (let edge = 0; edge < 3; edge++) {
+        const a = refs[edge];
+        const b = refs[(edge + 1) % 3];
+        const key = edgeKey(a, b);
+        if (!edgeUses.has(key)) edgeUses.set(key, []);
+        edgeUses.get(key).push({ tri, dir: a < b ? 1 : -1 });
+      }
+    }
+
+    const invalidEdges = [...edgeUses.values()].filter(uses => uses.length !== 2);
+    if (invalidEdges.length) {
+      const openEdges = invalidEdges.filter(uses => uses.length === 1).length;
+      const overusedEdges = invalidEdges.length - openEdges;
+      const firstInvalid = [...edgeUses.entries()]
+        .find(([, uses]) => uses.length !== 2);
+      const sampleRefs = (firstInvalid?.[0] || '').split(':').map(Number);
+      const sampleCoords = sampleRefs.map(index => [
+        mesh.verts[index * 3],
+        mesh.verts[index * 3 + 1],
+        mesh.verts[index * 3 + 2],
+      ].map(value => Number(value.toFixed(4))));
+      throw new Error(
+        `${name}: malla no-manifold (${openEdges} aristas abiertas, ` +
+        `${overusedEdges} aristas compartidas por mas de dos caras; ` +
+        `muestra ${firstInvalid?.[0] || 'n/a'} x${firstInvalid?.[1]?.length || 0} ` +
+        `${JSON.stringify(sampleCoords)}).`
+      );
+    }
+
+    const adjacency = new Array(mesh.nTris).fill(null).map(() => []);
+    edgeUses.forEach(uses => {
+      const [left, right] = uses;
+      const relativeFlip = left.dir === right.dir ? 1 : 0;
+      adjacency[left.tri].push({ tri: right.tri, relativeFlip });
+      adjacency[right.tri].push({ tri: left.tri, relativeFlip });
+    });
+
+    const flips = new Int8Array(mesh.nTris);
+    flips.fill(-1);
+    const components = [];
+    for (let seed = 0; seed < mesh.nTris; seed++) {
+      if (flips[seed] !== -1) continue;
+      const component = [];
+      const queue = [seed];
+      flips[seed] = 0;
+      for (let cursor = 0; cursor < queue.length; cursor++) {
+        const tri = queue[cursor];
+        component.push(tri);
+        adjacency[tri].forEach(link => {
+          const expected = flips[tri] ^ link.relativeFlip;
+          if (flips[link.tri] === -1) {
+            flips[link.tri] = expected;
+            queue.push(link.tri);
+          } else if (flips[link.tri] !== expected) {
+            throw new Error(`${name}: la superficie no admite una orientacion coherente.`);
+          }
+        });
+      }
+      components.push(component);
+    }
+
+    for (let tri = 0; tri < mesh.nTris; tri++) {
+      if (!flips[tri]) continue;
+      const offset = tri * 3;
+      const swap = triangles[offset + 1];
+      triangles[offset + 1] = triangles[offset + 2];
+      triangles[offset + 2] = swap;
+    }
+
+    function triangleVolume(tri) {
+      const offset = tri * 3;
+      const ia = triangles[offset] * 3;
+      const ib = triangles[offset + 1] * 3;
+      const ic = triangles[offset + 2] * 3;
+      const ax = mesh.verts[ia], ay = mesh.verts[ia + 1], az = mesh.verts[ia + 2];
+      const bx = mesh.verts[ib], by = mesh.verts[ib + 1], bz = mesh.verts[ib + 2];
+      const cx = mesh.verts[ic], cy = mesh.verts[ic + 1], cz = mesh.verts[ic + 2];
+      return (
+        ax * (by * cz - bz * cy) -
+        ay * (bx * cz - bz * cx) +
+        az * (bx * cy - by * cx)
+      ) / 6;
+    }
+
+    let signedVolume = 0;
+    components.forEach(component => {
+      let volume = component.reduce((sum, tri) => sum + triangleVolume(tri), 0);
+      if (Math.abs(volume) < 1e-9) {
+        throw new Error(`${name}: uno de los componentes tiene volumen nulo.`);
+      }
+      if (volume < 0) {
+        component.forEach(tri => {
+          const offset = tri * 3;
+          const swap = triangles[offset + 1];
+          triangles[offset + 1] = triangles[offset + 2];
+          triangles[offset + 2] = swap;
+        });
+        volume = -volume;
+      }
+      signedVolume += volume;
+    });
+
+    const orientedEdges = new Map();
+    for (let tri = 0; tri < mesh.nTris; tri++) {
+      const refs = [
+        triangles[tri * 3],
+        triangles[tri * 3 + 1],
+        triangles[tri * 3 + 2],
+      ];
+      for (let edge = 0; edge < 3; edge++) {
+        const a = refs[edge];
+        const b = refs[(edge + 1) % 3];
+        const key = edgeKey(a, b);
+        orientedEdges.set(key, (orientedEdges.get(key) || 0) + (a < b ? 1 : -1));
+      }
+    }
+    const inconsistentEdges = [...orientedEdges.values()].filter(balance => balance !== 0);
+    if (inconsistentEdges.length) {
+      throw new Error(
+        `${name}: ${inconsistentEdges.length} aristas conservan orientacion inconsistente.`
+      );
+    }
+
+    return {
+      ...mesh,
+      indices: new Uint32Array(triangles),
+      shellCount: components.length,
+      signedVolume,
+    };
+  }
+
+  function escapeXML(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  }
+
+  function serializeObject(objId, cgId, colorIndex, name, verts, indices, nVerts, nTris) {
     let vertsXML = '';
     for (let i = 0; i < nVerts; i++) {
       const x = verts[i * 3 + 0].toFixed(4);
@@ -3983,13 +4157,9 @@ const Exporter = (() => {
       trisXML += `<triangle v1="${v1}" v2="${v2}" v3="${v3}"/>`;
     }
 
-    const safeName = name
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-
     return (
-      `<m:colorgroup id="${cgId}"><m:color color="#${hex}ff"/></m:colorgroup>\n    ` +
-      `<object id="${objId}" name="${safeName}" type="model" pid="${cgId}" pindex="0">` +
+      `<object id="${objId}" name="${escapeXML(name)}" type="model" ` +
+      `pid="${cgId}" pindex="${colorIndex}">` +
         `<mesh>` +
           `<vertices>${vertsXML}</vertices>` +
           `<triangles>${trisXML}</triangles>` +
@@ -4007,62 +4177,118 @@ const Exporter = (() => {
 
     Utils.toast('Construyendo geometría sólida…', '', 60000);
 
-    // 1. Recolectar geometría manifold para cada pieza
-    let failedCount = 0;
-    const allGeoms = pieces.map(p => {
+    const errors = [];
+    const allGeoms = pieces.map(piece => {
       try {
-        return collectManifoldGeometry(p);
-      } catch(e) {
-        console.error('Error en pieza', p.name, e);
-        failedCount++;
+        return collectManifoldGeometry(piece);
+      } catch (error) {
+        console.error('Error en pieza', piece.name, error);
+        errors.push(`${piece.name || 'Pieza'}: ${error.message}`);
         return null;
       }
     });
+    if (errors.length) {
+      throw new Error(`La exportacion se cancelo por geometria invalida:\n${errors.join('\n')}`);
+    }
 
-    // 2. Bajar todo al plano Z=0
-    const validGeoms  = allGeoms.map((g, i) => g);
-    const validVerts  = validGeoms.map(g => g ? g.verts  : new Float32Array(0));
-    const validNVerts = validGeoms.map(g => g ? g.nVerts : 0);
-    liftToFloor(validVerts, validNVerts);
+    liftToFloor(
+      allGeoms.map(geometry => geometry.verts),
+      allGeoms.map(geometry => geometry.nVerts)
+    );
 
-    // 3. Serializar como 3MF
     Utils.toast('Generando 3MF…', '', 60000);
     const zip = new JSZip();
-    let allResources = '', buildItems = '';
-    let idCounter = 10;
+    const records = pieces.map((piece, index) => ({
+      piece,
+      geometry: allGeoms[index],
+      objectId: index + 1,
+      name: piece.name || `Pieza ${index + 1}`,
+      hex: hexFromPiece(piece).toLowerCase(),
+    }));
+    const colors = [...new Set(records.map(record => record.hex))];
+    const colorGroupId = records.length + 1;
+    const rootObjectId = records.length + 2;
+    const safeFilename = escapeXML(filename || 'inkora-model');
 
-    pieces.forEach((piece, i) => {
-      const g = allGeoms[i];
-      if (!g || g.nTris === 0) return;
+    const colorGroupXML =
+      `<m:colorgroup id="${colorGroupId}">` +
+      colors.map(hex => `<m:color color="#${hex}ff"/>`).join('') +
+      `</m:colorgroup>`;
 
-      const objId = idCounter;
-      const cgId  = idCounter + 1;
-      idCounter  += 2;
+    const meshObjectsXML = records.map(record => serializeObject(
+      record.objectId,
+      colorGroupId,
+      colors.indexOf(record.hex),
+      record.name,
+      record.geometry.verts,
+      record.geometry.indices,
+      record.geometry.nVerts,
+      record.geometry.nTris
+    )).join('');
 
-      const hex  = hexFromPiece(piece);
-      const name = piece.name || `Pieza ${i + 1}`;
-
-      allResources += serializeObject(objId, cgId, hex, name, g.verts, g.indices, g.nVerts, g.nTris);
-      buildItems   += `<item objectid="${objId}"/>\n    `;
-    });
-
-    if (!buildItems.trim()) {
-      throw new Error('No se pudo generar geometría para ninguna pieza.');
-    }
+    const componentsXML = records
+      .map(record => `<component objectid="${record.objectId}"/>`)
+      .join('');
+    const rootObjectXML =
+      `<object id="${rootObjectId}" name="${safeFilename}" type="model">` +
+        `<components>${componentsXML}</components>` +
+      `</object>`;
 
     const modelXML = `<?xml version="1.0" encoding="UTF-8"?>
 <model unit="millimeter" xml:lang="en-US"
   xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
-  xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+  xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02"
+  xmlns:BambuStudio="http://schemas.bambulab.com/package/2021">
   <metadata name="Application">INKORA 3D Modeler v${APP_VERSION}</metadata>
+  <metadata name="BambuStudio:3mfVersion">1</metadata>
   <metadata name="CreationDate">${new Date().toISOString().slice(0, 10)}</metadata>
   <resources>
-    ${allResources.trim()}
+    ${colorGroupXML}
+    ${meshObjectsXML}
+    ${rootObjectXML}
   </resources>
   <build>
-    ${buildItems.trim()}
+    <item objectid="${rootObjectId}"/>
   </build>
 </model>`;
+
+    const totalFaces = records.reduce(
+      (sum, record) => sum + record.geometry.nTris,
+      0
+    );
+    const partsXML = records.map((record, index) => {
+      const extruder = colors.indexOf(record.hex) + 1;
+      return (
+        `<part id="${record.objectId}" subtype="normal_part">` +
+          `<metadata key="name" value="${escapeXML(record.name)}"/>` +
+          `<metadata key="matrix" value="1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1"/>` +
+          `<metadata key="source_object_id" value="0"/>` +
+          `<metadata key="source_volume_id" value="${index}"/>` +
+          `<metadata key="extruder" value="${extruder}"/>` +
+          `<mesh_stat face_count="${record.geometry.nTris}" edges_fixed="0" ` +
+            `degenerate_facets="0" facets_removed="0" facets_reversed="0" ` +
+            `backwards_edges="0"/>` +
+        `</part>`
+      );
+    }).join('');
+    const modelSettingsXML = `<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <object id="${rootObjectId}">
+    <metadata key="name" value="${safeFilename}"/>
+    <metadata key="extruder" value="1"/>
+    <metadata face_count="${totalFaces}"/>
+    ${partsXML}
+  </object>
+</config>`;
+
+    const filamentColors = colors.map(hex => `#${hex.toUpperCase()}`);
+    const projectSettings = JSON.stringify({
+      filament_colour: filamentColors,
+      filament_settings_id: filamentColors.map(() => ''),
+      filament_type: filamentColors.map(() => 'PLA'),
+      filament_ids: filamentColors.map(() => ''),
+      default_filament_colour: filamentColors.map(() => ''),
+    }, null, 2);
 
     zip.file('[Content_Types].xml',
       `<?xml version="1.0" encoding="UTF-8"?>` +
@@ -4079,9 +4305,18 @@ const Exporter = (() => {
       `</Relationships>`
     );
     zip.file('3D/3dmodel.model', modelXML);
+    zip.file('Metadata/model_settings.config', modelSettingsXML);
+    zip.file('Metadata/project_settings.config', projectSettings);
 
     const blob = await zip.generateAsync({ type: 'blob' });
-    return { blob, failedCount, totalCount: pieces.length, filename };
+    return {
+      blob,
+      failedCount: 0,
+      totalCount: pieces.length,
+      filename,
+      rootObjectId,
+      colorCount: colors.length,
+    };
   }
 
   function download3MFBlob(blob, filename = 'inkora-model') {
