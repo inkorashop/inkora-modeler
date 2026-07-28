@@ -241,3 +241,29 @@ npm run dist:installer
 Despues del push, verificar el release de Electron, el estado `Ready` de
 Vercel y la version que entrega el alias publico. El estado del deployment no
 reemplaza la comprobacion del contenido servido.
+
+## 9. Historial, picking y camara
+
+Desde `v1.0.5`, un snapshot geometrico tambien debe conservar:
+
+- seleccion unificada (`selectedIdxs` y `selectedFaces`);
+- huecos e islas solidas que integran cada pieza;
+- indices fuente usados por piezas ficticias, fusionadas o duplicadas;
+- visibilidad y modo de extrusion.
+
+Restaurar no termina al crear objetos Three.js. Antes de aceptar interaccion
+se deben actualizar sus matrices mundiales, porque un click puede ocurrir en
+el mismo frame que `Ctrl+Z`.
+
+En 3D, el orden de picking es:
+
+1. area rellena de una sub-cara;
+2. superficie solida;
+3. linea de contorno como ultimo recurso.
+
+Una linea no determina de que lado del borde hizo click el usuario y no debe
+ganar sobre una cara valida.
+
+Importar DXF/SVG no encuadra la escena. Debe preservar posicion, orientacion,
+target orbital y zoom, ademas de cancelar animaciones pendientes. El encuadre
+continua siendo una accion explicita mediante `F`.

@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.4">
+<meta name="inkora-version" content="1.0.5">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -629,7 +629,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.4</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.5</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -802,7 +802,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.4').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.5').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -2810,23 +2810,30 @@ const Viewport = (() => {
      su bounding box es más chico que el del contorno exterior.
      ────────────────────────────────────────────────────────────────────── */
   function pickBest(rc) {
-    const pickTargets=[];
+    const pickAreaTargets=[];
+    const pickLineTargets=[];
     group3D.traverse(o=>{
-      if((o.isLine || o.isMesh) && o.userData?._pickContourIdx != null) pickTargets.push(o);
+      if(o.userData?._pickContourIdx == null)return;
+      if(o.isMesh)pickAreaTargets.push(o);
+      else if(o.isLine)pickLineTargets.push(o);
     });
-    const hitsPickTargets=rc.intersectObjects(pickTargets, false);
+    const hitsPickAreas=rc.intersectObjects(pickAreaTargets, false);
+    const hitsPickLines=rc.intersectObjects(pickLineTargets, false);
     const all3D=[];
     group3D.traverse(o=>{if(o.isMesh && o.userData?._pickContourIdx == null)all3D.push(o);});
     const hits3D=rc.intersectObjects(all3D);
 
-    if (hitsPickTargets.length) {
-      hitsPickTargets.sort((a, b) => {
+    function sortPickTargets(hits) {
+      hits.sort((a, b) => {
         const aa = a.object.userData._pickArea ?? 0;
         const ba = b.object.userData._pickArea ?? 0;
         if (Math.abs(a.distance - b.distance) > 0.6) return a.distance - b.distance;
         return aa === ba ? a.distance - b.distance : aa - ba;
       });
-      const targetHit = hitsPickTargets[0];
+      return hits;
+    }
+
+    function pickTargetResult(targetHit) {
       if (hits3D.length && hits3D[0].distance + 0.6 < targetHit.distance) {
         return {mesh:hits3D[0].object,is3D:true,point:hits3D[0].point};
       }
@@ -2841,8 +2848,17 @@ const Viewport = (() => {
       };
     }
 
-    // 3D tiene prioridad absoluta
+    // Las áreas rellenas invisibles representan la cara real de cada
+    // sub-contorno. Deben ganar sobre las líneas decorativas: una línea no
+    // tiene lado interior/exterior y cerca de un borde podía seleccionar el
+    // anillo equivocado para re-extruirlo como pared.
+    if(hitsPickAreas.length)return pickTargetResult(sortPickTargets(hitsPickAreas)[0]);
+
+    // Si el rayo alcanzó la superficie sólida, resolver desde esa cara antes
+    // de usar una línea como fallback conserva el lado real del click.
     if (hits3D.length) return {mesh:hits3D[0].object,is3D:true,point:hits3D[0].point};
+
+    if(hitsPickLines.length)return pickTargetResult(sortPickTargets(hitsPickLines)[0]);
 
     // 2D: recolectar todos los hits y ordenar por área ascendente
     const all2D=[];
@@ -3055,6 +3071,34 @@ const Viewport = (() => {
   function getScene(){return scene;}
   function getCamera(){return camera;}
   function getRenderer(){return renderer;}
+  function getNavigationState(){
+    return {
+      position: camera.position.toArray(),
+      quaternion: camera.quaternion.toArray(),
+      up: camera.up.toArray(),
+      target: orb.target.toArray(),
+      zoom: camera.zoom,
+    };
+  }
+  function restoreNavigationState(state){
+    if(!state)return;
+    _focusAnim=null;
+    if(Array.isArray(state.position))camera.position.fromArray(state.position);
+    if(Array.isArray(state.quaternion))camera.quaternion.fromArray(state.quaternion);
+    if(Array.isArray(state.up))camera.up.fromArray(state.up);
+    if(Array.isArray(state.target))orb.target.fromArray(state.target);
+    if(Number.isFinite(state.zoom))camera.zoom=state.zoom;
+    camera.updateProjectionMatrix();
+    orb.recomputeSpherical();
+    // Importar congela la vista en el punto exacto elegido por el usuario,
+    // incluso si habia un zoom amortiguado o focusAll todavia en curso.
+    orb.targetRadius=orb.sph.radius;
+    camera.updateMatrixWorld(true);
+  }
+  function updateInteractionMatrices(){
+    camera.updateMatrixWorld(true);
+    scene.updateMatrixWorld(true);
+  }
 
   /* ── Orbit controls ──
      FIX CURSOR: grab/grabbing se setean directo en el canvas.
@@ -3172,6 +3216,7 @@ const Viewport = (() => {
   return {
     init,add2D,clear2D,add3D,remove2D,remove3D,clearAll,focusAll,
     setEmissive,clearEmissive,onClickMesh,onHoverMesh,getScene,getCamera,getRenderer,
+    getNavigationState,restoreNavigationState,updateInteractionMatrices,
     group2D:()=>group2D, group3D:()=>group3D,
     applyHighlight: _applyHighlight,
     setTheme: applySceneTheme,
@@ -3367,12 +3412,13 @@ const GeoModule = (() => {
     depth, bevel, bevelSeg,
     baseX, baseY, baseZ,
     tx = 0, ty = 0, tz = 0, rotY = 0, scale = 1,
-    holeIdxs = [], mergedSourceIdxs = [], sourceContourIdx = null,
+    holeIdxs = [], solidIslandIdxs = [], mergedSourceIdxs = [], sourceContourIdx = null,
   }) {
     return {
       mesh, name, color, contourIdx,
       _depth: depth, _bevel: bevel, _bevelSeg: bevelSeg,
       _holeIdxs: holeIdxs,
+      _solidIslandIdxs: solidIslandIdxs,
       _mergedSourceIdxs: mergedSourceIdxs,
       _sourceContourIdx: sourceContourIdx,
       tx, ty, tz, rotY, scale,
@@ -4088,6 +4134,9 @@ const History = (() => {
       filename: state.filename,
       groups: state.groups.map(g => ({ ...g, memberIdxs: [...g.memberIdxs] })),
       _nextGroupId: state._nextGroupId,
+      selectedIdxs: [...state.selectedIdxs],
+      selectedFaces: [...state.selectedFaces.entries()],
+      extrudeMode: state.extrudeMode,
       contours: state.contours.map(c => ({
         // Referencia a la shape original (objeto Three.Shape inmutable en uso)
         shape:   c.shape,
@@ -4118,6 +4167,7 @@ const History = (() => {
           bevel:    c.piece._bevel,
           bevelSeg: c.piece._bevelSeg,
           holeIdxs: c.piece._holeIdxs || [],
+          solidIslandIdxs: c.piece._solidIslandIdxs || [],
           mergedSourceIdxs: c.piece._mergedSourceIdxs || [],
           sourceContourIdx: c.piece._sourceContourIdx ?? null,
           visible: c.piece.mesh ? c.piece.mesh.visible !== false : true,
@@ -5003,6 +5053,21 @@ const PanelUI = (() => {
     _lastMouse.y = e.clientY;
   });
 
+  function directHoleShapes(contours, parentIdx) {
+    const parent = contours[parentIdx];
+    if (!parent) return [];
+    return contours
+      .filter((child, childIdx) =>
+        childIdx !== parentIdx &&
+        child?.shape &&
+        !child._deleted &&
+        !child.deleted &&
+        child.parentIdx === parentIdx &&
+        child.depth === parent.depth + 1
+      )
+      .map(child => child.shape);
+  }
+
   function pointInPolygon(pt, poly) {
     return Utils.pointInPolygon(pt.x, pt.y, poly);
   }
@@ -5188,25 +5253,75 @@ const PanelUI = (() => {
 
     const NEUTRAL_COLOR = '#44445a';
     const pieceByContourIdx = new Map();
-    function shapeWithSnapshotHoles(srcIdx, pd) {
-      const src = snap.contours[srcIdx];
-      const sourceIdx = Number.isInteger(src?.sourceContourIdx)
-        ? src.sourceContourIdx
-        : srcIdx;
-      const source = snap.contours[sourceIdx] || src;
-      const sh = WindingUtils.makeShapeCCW(source.shape);
-      (pd.holeIdxs || []).forEach(hIdx => {
-        const hContour = snap.contours[hIdx];
-        if (!hContour) return;
-        const hSourceIdx = Number.isInteger(hContour.sourceContourIdx)
-          ? hContour.sourceContourIdx
-          : hIdx;
-        const hSource = snap.contours[hSourceIdx] || hContour;
-        if (hSource.parentIdx === sourceIdx) {
-          sh.holes.push(WindingUtils.makeHoleCW(hSource.shape));
-        }
+
+    function snapshotSourceIdx(rawIdx) {
+      let idx = Number(rawIdx);
+      const visited = new Set();
+      while (Number.isInteger(idx) && !visited.has(idx)) {
+        visited.add(idx);
+        const contour = snap.contours[idx];
+        if (!contour || !Number.isInteger(contour.sourceContourIdx)) return idx;
+        idx = contour.sourceContourIdx;
+      }
+      return Number(rawIdx);
+    }
+
+    const sourcesWithOwnPiece = new Set(
+      snap.contours
+        .map((contour, idx) =>
+          contour && (contour.pieceData || contour.linkedPieceIdx != null)
+            ? snapshotSourceIdx(idx)
+            : null
+        )
+        .filter(Number.isInteger)
+    );
+
+    function sourceHasOwnPiece(sourceIdx) {
+      return sourcesWithOwnPiece.has(sourceIdx);
+    }
+
+    function buildSnapshotPieceGeometry(rawSourceIdxs, pd, includeUnownedFallback = false) {
+      const sourceIdxs = rawSourceIdxs.map(snapshotSourceIdx);
+      const selectedSources = new Set(sourceIdxs);
+      const holeSources = new Set((pd.holeIdxs || []).map(snapshotSourceIdx));
+      const hasExplicitIslands = Array.isArray(pd.solidIslandIdxs);
+      const solidIslandSources = new Set(
+        (pd.solidIslandIdxs || []).map(snapshotSourceIdx)
+      );
+
+      function buildSourceShape(sourceIdx) {
+        const source = snap.contours[sourceIdx];
+        const shape = WindingUtils.makeShapeCCW(source.shape);
+        const nestedShapes = [];
+
+        holeSources.forEach(holeIdx => {
+          const hole = snap.contours[holeIdx];
+          if (!hole || hole.deleted || hole.parentIdx !== sourceIdx) return;
+          if (Number(hole.depth) !== Number(source.depth) + 1) return;
+          shape.holes.push(WindingUtils.makeHoleCW(hole.shape));
+
+          snap.contours.forEach((island, islandIdx) => {
+            if (!island || island.isFakeContour || island.deleted) return;
+            if (island.parentIdx !== holeIdx) return;
+            if (Number(island.depth) !== Number(hole.depth) + 1) return;
+            if (selectedSources.has(islandIdx) || sourceHasOwnPiece(islandIdx)) return;
+            if (hasExplicitIslands && !solidIslandSources.has(islandIdx)) return;
+            if (!hasExplicitIslands && !island.absorbed && !includeUnownedFallback) return;
+            const nested = buildSourceShape(islandIdx);
+            nestedShapes.push(nested.shape, ...nested.nestedShapes);
+          });
+        });
+
+        return { shape, nestedShapes };
+      }
+
+      const roots = sourceIdxs.map(buildSourceShape);
+      const rootShapes = roots.map(root => root.shape);
+      const extraShapes = roots.length ? [...roots[0].nestedShapes] : [];
+      roots.slice(1).forEach(root => {
+        extraShapes.push(root.shape, ...root.nestedShapes);
       });
-      return sh;
+      return { rootShapes, extraShapes };
     }
     snap.contours.forEach((sc, i) => {
       // Contornos ficticios (de extrusión 3D sobre 3D): no tienen mesh 2D propio
@@ -5229,11 +5344,13 @@ const PanelUI = (() => {
         if (sc.pieceData) {
           const pd = sc.pieceData;
           const sourceIdxs = pd.mergedSourceIdxs && pd.mergedSourceIdxs.length ? pd.mergedSourceIdxs : [i];
-          const compositeShape = shapeWithSnapshotHoles(sourceIdxs[0], pd);
-          const mergedExtraShapes = sourceIdxs.slice(1).map(srcIdx => shapeWithSnapshotHoles(srcIdx, pd));
+          const rebuilt = buildSnapshotPieceGeometry(sourceIdxs, pd, true);
+          const compositeShape = rebuilt.rootShapes[0];
+          const mergedExtraShapes = rebuilt.extraShapes;
           if (sourceIdxs.length > 1) {
-            compositeShape._pickCIdx = sourceIdxs[0];
-            mergedExtraShapes.forEach((sh, i) => { sh._pickCIdx = sourceIdxs[i + 1]; });
+            rebuilt.rootShapes.forEach((shape, rootIdx) => {
+              shape._pickCIdx = sourceIdxs[rootIdx];
+            });
           }
           const mesh = GeoModule.extrude(compositeShape, sc.offX, sc.offY, {
             depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg, color: pd.color,
@@ -5243,7 +5360,7 @@ const PanelUI = (() => {
             addMergedContourPickAreas(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
               cIdx: srcIdx,
               c: { shape: snap.contours[srcIdx].shape },
-              pickShape: shapeIdx === 0 ? compositeShape : mergedExtraShapes[shapeIdx - 1],
+              pickShape: rebuilt.rootShapes[shapeIdx],
             })), pd.depth);
           }
           // Restaurar posición base (encima de la pieza original)
@@ -5256,6 +5373,7 @@ const PanelUI = (() => {
             contourIdx: i,
             depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg,
             holeIdxs: pd.holeIdxs || [],
+            solidIslandIdxs: pd.solidIslandIdxs || [],
             mergedSourceIdxs: pd.mergedSourceIdxs || [],
             sourceContourIdx: pd.sourceContourIdx ?? null,
             tx: pd.tx || 0, ty: pd.ty || 0, tz: pd.tz || 0,
@@ -5279,7 +5397,13 @@ const PanelUI = (() => {
       const flatColor = legacyColor
         ? Utils.contourDisplayColor(legacyColor)
         : (sc.extruded && sc.pieceData ? sc.pieceData.color : NEUTRAL_COLOR);
-      const flatMesh    = GeoModule.makeFlat(sc.shape, sc.offX, sc.offY, flatColor);
+      const flatMesh    = GeoModule.makeFlat(
+        sc.shape,
+        sc.offX,
+        sc.offY,
+        flatColor,
+        directHoleShapes(snap.contours, i)
+      );
       const outlineMesh = GeoModule.makeOutline(sc.shape, sc.offX, sc.offY, flatColor);
       Viewport.add2D(flatMesh);
       Viewport.add2D(outlineMesh);
@@ -5302,11 +5426,13 @@ const PanelUI = (() => {
         const pd = sc.pieceData;
         // Reconstruir compositeShape con los mismos holes que al extruir originalmente
         const sourceIdxs = pd.mergedSourceIdxs && pd.mergedSourceIdxs.length ? pd.mergedSourceIdxs : [i];
-        const compositeShape = shapeWithSnapshotHoles(sourceIdxs[0], pd);
-        const mergedExtraShapes = sourceIdxs.slice(1).map(srcIdx => shapeWithSnapshotHoles(srcIdx, pd));
+        const rebuilt = buildSnapshotPieceGeometry(sourceIdxs, pd, false);
+        const compositeShape = rebuilt.rootShapes[0];
+        const mergedExtraShapes = rebuilt.extraShapes;
         if (sourceIdxs.length > 1) {
-          compositeShape._pickCIdx = sourceIdxs[0];
-          mergedExtraShapes.forEach((sh, i) => { sh._pickCIdx = sourceIdxs[i + 1]; });
+          rebuilt.rootShapes.forEach((shape, rootIdx) => {
+            shape._pickCIdx = sourceIdxs[rootIdx];
+          });
         }
         const mesh = GeoModule.extrude(compositeShape, sc.offX, sc.offY, {
           depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg, color: pd.color,
@@ -5316,7 +5442,7 @@ const PanelUI = (() => {
           addMergedContourPickAreas(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
             cIdx: srcIdx,
             c: { shape: snap.contours[srcIdx].shape },
-            pickShape: shapeIdx === 0 ? compositeShape : mergedExtraShapes[shapeIdx - 1],
+            pickShape: rebuilt.rootShapes[shapeIdx],
           })), pd.depth);
         }
         Viewport.add3D(mesh);
@@ -5325,6 +5451,7 @@ const PanelUI = (() => {
           contourIdx: i,
           depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg,
           holeIdxs: pd.holeIdxs || [],
+          solidIslandIdxs: pd.solidIslandIdxs || [],
           mergedSourceIdxs: pd.mergedSourceIdxs || [],
           sourceContourIdx: pd.sourceContourIdx ?? null,
           // Restaurar transform guardado en snapshot
@@ -5362,13 +5489,36 @@ const PanelUI = (() => {
     });
 
     State.selectedPieceIdx = null;
-    State.selectedIdxs = new Set();
-    State.selectedFaces = new Map();
     State.groups = snap.groups ? snap.groups.map(g => ({ ...g, memberIdxs: [...g.memberIdxs] })) : [];
     State._nextGroupId = snap._nextGroupId || 1;
+    const legacySelectedIdxs = snap.contours
+      .map((sc, idx) => sc.sel2D ? idx : -1)
+      .filter(idx => idx !== -1);
+    const restoredSelectedIdxs = Array.isArray(snap.selectedIdxs)
+      ? snap.selectedIdxs
+      : legacySelectedIdxs;
+    State.selectedIdxs = new Set(
+      restoredSelectedIdxs.filter(idx => Number.isInteger(idx) && Utils.isVisibleContour(State.contours[idx]))
+    );
+    State.selectedFaces = new Map(
+      (Array.isArray(snap.selectedFaces) ? snap.selectedFaces : [])
+        .filter(entry =>
+          Array.isArray(entry) &&
+          State.selectedIdxs.has(entry[0]) &&
+          (entry[1] === 'top' || entry[1] === 'bottom')
+        )
+    );
+    State.contours.forEach((contour, idx) => {
+      contour.sel2D = !contour.extruded && State.selectedIdxs.has(idx);
+    });
+    State.selectedIdxs.forEach(idx => {
+      if (!State.selectedFaces.has(idx)) {
+        State.selectedFaces.set(idx, safeSelectionFace(State.contours[idx]));
+      }
+    });
     // snap.panel / snap.extrudeMode sólo vienen presentes cuando el snapshot
-    // viene de un archivo de proyecto o de otra pestaña (History.snapshot(),
-    // usado por undo/redo, no los incluye) — no-op en el camino de undo/redo.
+    // viene de un archivo de proyecto, otra pestaña o una versión reciente
+    // del historial. Snapshots antiguos siguen siendo compatibles.
     if (snap.panel) {
       const dEl = document.getElementById('ex-depth'), bEl = document.getElementById('ex-bevel'), bsEl = document.getElementById('ex-bseg');
       if (dEl && snap.panel.depth != null) dEl.value = snap.panel.depth;
@@ -5377,10 +5527,15 @@ const PanelUI = (() => {
     }
     if (snap.extrudeMode) setExtrudeMode(snap.extrudeMode, false);
     PanelUI.refreshContourVisuals();
+    PanelUI._syncPieceSelection();
     PanelUI.renderList();
     PanelUI.updateModeBadge();
     PanelUI.updateButtons();
     PanelUI.updateColorPanel();
+    // Los clicks pueden llegar en el mismo frame que Ctrl+Z. Three.js solo
+    // actualiza matrixWorld durante render; forzarlo acá evita raycasts sobre
+    // las matrices identidad de los meshes recién reconstruidos.
+    Viewport.updateInteractionMatrices();
   }
 
   /* ══════════════════════════════════════════════════════
@@ -5477,6 +5632,10 @@ const PanelUI = (() => {
       filename: rawSnap.filename || 'inkora-project',
       groups: Array.isArray(rawSnap.groups) ? rawSnap.groups.map(g => ({ ...g, memberIdxs: [...(g.memberIdxs || [])] })) : [],
       _nextGroupId: rawSnap._nextGroupId || 1,
+      selectedIdxs: Array.isArray(rawSnap.selectedIdxs) ? [...rawSnap.selectedIdxs] : undefined,
+      selectedFaces: Array.isArray(rawSnap.selectedFaces)
+        ? rawSnap.selectedFaces.map(entry => [...entry])
+        : undefined,
       extrudeMode: rawSnap.extrudeMode || 'separate',
       panel: rawSnap.panel || null,
       contours: rawSnap.contours.map(sc => ({ ...sc, shape: deserializeShape(sc.shape) })),
@@ -6276,6 +6435,7 @@ const PanelUI = (() => {
             tx: (src.tx||0)+5, ty: src.ty||0, tz: src.tz||0,
             rotY: src.rotY||0, scale: src.scale||1,
             holeIdxs: src._holeIdxs ? [...src._holeIdxs] : [],
+            solidIslandIdxs: src._solidIslandIdxs ? [...src._solidIslandIdxs] : [],
             mergedSourceIdxs: newIdxs.length > 1 ? newIdxs : [],
           });
 
@@ -6303,7 +6463,13 @@ const PanelUI = (() => {
             const h = State.contours[hIdx];
             if (!h || h._deleted) return;
             const newParentIdx = idxMap.get(h.parentIdx);
-            if (newParentIdx == null) return;
+            // Una capa 3D ficticia conserva la topología en su contorno
+            // fuente original. En ese caso no hay parent fake que remapear:
+            // el índice del hueco original sigue siendo la referencia válida.
+            if (newParentIdx == null) {
+              newHoleIdxs.push(hIdx);
+              return;
+            }
             const newHoleIdx = State.contours.length;
             newHoleIdxs.push(newHoleIdx);
             State.contours.push({
@@ -6399,6 +6565,7 @@ const PanelUI = (() => {
           if (State.selectedPieceIdx === null) break;
           const p = State.pieces[State.selectedPieceIdx];
           p.mesh.visible = !p.mesh.visible;
+          History.push(State);
           Utils.toast(p.mesh.visible ? `${p.name} visible.` : `${p.name} oculta.`);
           break;
         }
@@ -6410,6 +6577,7 @@ const PanelUI = (() => {
           State.pieces.forEach(p => {
             p.mesh.visible = allHidden ? true : (p === target);
           });
+          History.push(State);
           Utils.toast(allHidden ? 'Todas visibles.' : `Aislando ${target.name}.`);
           break;
         }
@@ -6869,6 +7037,7 @@ const PanelUI = (() => {
   // arrastrado/elegido, drag&drop, y texto pegado (Ctrl+V), así ningún
   // camino de importación duplica esta lógica.
   function populateShapeData(shapeData, filename){
+    const navigationState=Viewport.getNavigationState();
     History.clear();   // carga nueva = historial fresco
     PanelUI.clearAllSelection();
     Viewport.clearAll();State.reset();
@@ -6881,11 +7050,7 @@ const PanelUI = (() => {
     // Huecos DIRECTOS de cada contorno (mismo criterio que absorbChildren al
     // extruir): solo hijos con depth+1, no toda la descendencia. Se calcula
     // una vez antes del loop porque necesita ver todo shapeData completo.
-    const directHolesOf = shapeData.map((sd, i) =>
-      shapeData
-        .filter(child => child.parentIdx === i && child.depth === sd.depth + 1)
-        .map(child => child.shape)
-    );
+    const directHolesOf = shapeData.map((_, i) => directHoleShapes(shapeData, i));
     shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color,elementId},i)=>{
       // color se guarda TAL CUAL viene (puede ser null = "sin color
       // explícito"). No se hornea el default acá — así, si el usuario
@@ -6901,7 +7066,11 @@ const PanelUI = (() => {
       State.contours.push({shape,offX,offY,depth,parentIdx,layer,color,elementId: elementId ?? null,flatMesh,outlineMesh,sel2D:false,extruded:false,piece:null});
     });
     PanelUI.renderList();PanelUI.refreshContourVisuals();PanelUI.updateModeBadge();
-    Viewport.focusAll();
+    // Importar cambia la geometría, no el punto de vista del usuario.
+    // También cancela cualquier foco/zoom amortiguado pendiente para que no
+    // aparezca un movimiento tardío después de terminar la carga.
+    Viewport.restoreNavigationState(navigationState);
+    Viewport.updateInteractionMatrices();
     // Snapshot del estado base DESPUÉS de construir toda la escena
     History.push(State);
     ProjectTabs.syncActiveFromState();
@@ -7081,7 +7250,14 @@ const PanelUI = (() => {
     //   ... y así recursivamente
     //
     // extraShapes: array acumulador de THREE.Shape de islas internas.
-    function absorbChildren(parentIdx, parentDepth, compositeShape, extraShapes, holeIdxs = []) {
+    function absorbChildren(
+      parentIdx,
+      parentDepth,
+      compositeShape,
+      extraShapes,
+      holeIdxs = [],
+      solidIslandIdxs = []
+    ) {
       const parent = State.contours[parentIdx];
       State.contours.forEach((candidate, cidx) => {
         if (candidate.extruded) return;
@@ -7120,7 +7296,15 @@ const PanelUI = (() => {
           island.piece = null;
 
           // Sub-huecos de la isla → holes del islandShape + posibles islas anidadas
-          absorbChildren(iidx, island.depth, islandShape, extraShapes, holeIdxs);
+          absorbChildren(
+            iidx,
+            island.depth,
+            islandShape,
+            extraShapes,
+            holeIdxs,
+            solidIslandIdxs
+          );
+          solidIslandIdxs.push(iidx);
           extraShapes.push(islandShape);
         });
       });
@@ -7138,7 +7322,15 @@ const PanelUI = (() => {
       const compositeShape = WindingUtils.makeShapeCCW(c.shape);
       const extraShapes = []; // islas internas (sólidos dentro de huecos)
       const holeIdxs = [];
-      absorbChildren(cIdx, c.depth, compositeShape, extraShapes, holeIdxs);
+      const solidIslandIdxs = [];
+      absorbChildren(
+        cIdx,
+        c.depth,
+        compositeShape,
+        extraShapes,
+        holeIdxs,
+        solidIslandIdxs
+      );
 
       // Agregar interiores seleccionados como holes del exterior para evitar solapamiento
       State.contours.forEach((candidate, cidx) => {
@@ -7160,7 +7352,9 @@ const PanelUI = (() => {
           if (candidate.depth !== c.depth + 1) return;
           holeIdxs.push(cidx);
         });
-        mergedItems.push({ c, cIdx, color, compositeShape, extraShapes, holeIdxs });
+        mergedItems.push({
+          c, cIdx, color, compositeShape, extraShapes, holeIdxs, solidIslandIdxs
+        });
         return;
       }
 
@@ -7181,6 +7375,7 @@ const PanelUI = (() => {
         depth: (c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
         holeIdxs: Array.from(new Set(holeIdxs)),
+        solidIslandIdxs: Array.from(new Set(solidIslandIdxs)),
       });
       State.pieces.push(piece);
       c.extruded=true; c.sel2D=false; c.piece=piece;
@@ -7211,6 +7406,7 @@ const PanelUI = (() => {
         depth: (primary.c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
         holeIdxs: Array.from(new Set(mergedItems.flatMap(item => item.holeIdxs))),
+        solidIslandIdxs: Array.from(new Set(mergedItems.flatMap(item => item.solidIslandIdxs))),
         mergedSourceIdxs: mergedItems.map(item => item.cIdx),
       });
       State.pieces.push(piece);
@@ -7248,7 +7444,14 @@ const PanelUI = (() => {
       return { source: c, sourceIdx: idx };
     }
 
-    function addFaceTopology(sourceIdx, compositeShape, extraShapes, holeIdxs, selectedSourceIdxs) {
+    function addFaceTopology(
+      sourceIdx,
+      compositeShape,
+      extraShapes,
+      holeIdxs,
+      selectedSourceIdxs,
+      solidIslandIdxs
+    ) {
       const source = State.contours[sourceIdx];
       if (!source?.shape) return;
       const sourceDepth = Number(source.depth);
@@ -7291,8 +7494,10 @@ const PanelUI = (() => {
             islandShape,
             extraShapes,
             holeIdxs,
-            selectedSourceIdxs
+            selectedSourceIdxs,
+            solidIslandIdxs
           );
+          solidIslandIdxs.push(islandIdx);
           extraShapes.push(islandShape);
         });
       });
@@ -7303,8 +7508,16 @@ const PanelUI = (() => {
       const compositeShape = WindingUtils.makeShapeCCW(source.shape || c.shape);
       const extraShapes = [];
       const holeIdxs = [];
+      const solidIslandIdxs = [];
 
-      addFaceTopology(sourceIdx, compositeShape, extraShapes, holeIdxs, selectedSourceIdxs);
+      addFaceTopology(
+        sourceIdx,
+        compositeShape,
+        extraShapes,
+        holeIdxs,
+        selectedSourceIdxs,
+        solidIslandIdxs
+      );
 
       // La metadata de la pieza funciona como respaldo para duplicados o estados
       // restaurados donde el hueco registrado pueda no estar en el índice visible.
@@ -7321,7 +7534,7 @@ const PanelUI = (() => {
       });
 
       return {
-        c, idx, source, sourceIdx, compositeShape, extraShapes, holeIdxs,
+        c, idx, source, sourceIdx, compositeShape, extraShapes, holeIdxs, solidIslandIdxs,
         face: State.selectedFaces.get(idx) || viewFaceForContour(c),
       };
     }
@@ -7402,6 +7615,7 @@ const PanelUI = (() => {
           depth, bevel, bevelSeg: bseg,
           baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
           holeIdxs: Array.from(new Set(items.flatMap(item => item.holeIdxs || []))),
+          solidIslandIdxs: Array.from(new Set(items.flatMap(item => item.solidIslandIdxs || []))),
           mergedSourceIdxs: newIdxs,
         });
         addMergedContourPickAreas(mesh, items.map((item, i) => ({
@@ -7446,6 +7660,7 @@ const PanelUI = (() => {
         depth, bevel, bevelSeg: bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
         holeIdxs: Array.from(new Set(item.holeIdxs || [])),
+        solidIslandIdxs: Array.from(new Set(item.solidIslandIdxs || [])),
       });
       State.pieces.push(piece);
       // Crear contorno para la nueva pieza (ficticio: sin flatMesh/outlineMesh)

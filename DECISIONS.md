@@ -1260,3 +1260,71 @@ El modelo del diseno por capas, el proceso de investigacion, las alternativas
 descartadas, los invariantes y el protocolo de pruebas quedaron consolidados
 en `GEOMETRY_PIPELINE.md`. Debe leerse antes de modificar importacion,
 resolucion booleana, extrusion o exportacion.
+
+## 2026-07-28 -- v1.0.5: undo/redo determinista y camara estable al importar
+
+### Sintoma reportado
+
+Despues de extruir correctamente una cara, deshacer y volver a seleccionarla
+cerca de un borde, a veces se extruia un anillo como pared fina. El problema
+era intermitente y favorecia el click inmediato despues de `Ctrl+Z`.
+
+### Causas relacionadas
+
+La auditoria encontro varias diferencias entre el estado original y el
+reconstruido:
+
+- `restoreSnapshot()` recreaba los `flatMesh` sin los huecos directos que
+  `populateShapeData()` usaba durante la importacion. La geometria de picking
+  2D cambiaba despues de undo.
+- los meshes nuevos podian recibir un raycast antes del siguiente render,
+  cuando sus matrices mundiales todavia no estaban actualizadas;
+- el snapshot guardaba `sel2D`, pero no `selectedIdxs` ni `selectedFaces`;
+  distintas partes de la UI podian discrepar sobre que estaba seleccionado;
+- las lineas de contorno 3D competian con las areas rellenas de picking. Cerca
+  del borde, una linea sin lado interior/exterior podia ganar y elegir el
+  anillo adyacente;
+- redo reconstruia huecos, pero no registraba de forma explicita las islas
+  solidas incluidas dentro de ellos;
+- duplicar una re-extrusion conservaba la malla clonada, pero perdia
+  referencias a huecos cuyo padre seguia siendo el contorno fuente;
+- ocultar y aislar piezas no agregaban un snapshot propio.
+
+### Solucion
+
+- La construccion de superficies 2D inicial y restaurada comparte ahora
+  `directHoleShapes()`.
+- `restoreSnapshot()` fuerza `matrixWorld` antes de volver a aceptar clicks.
+- El historial serializa y restaura la seleccion unificada, sus caras y el
+  modo de extrusion.
+- El picking 3D prioriza areas de cara, luego superficie solida y usa lineas
+  solo como fallback.
+- Cada pieza registra `_solidIslandIdxs`, ademas de `_holeIdxs`, para que la
+  reconstruccion no tenga que inferir que material pertenecia a la extrusion.
+- Los duplicados preservan referencias topologicas fuente cuando no existe un
+  padre ficticio que remapear.
+- Ocultar y aislar generan snapshots undoables.
+
+### Camara durante importacion
+
+`populateShapeData()` llamaba siempre a `Viewport.focusAll()`. La camara
+parecia inmovil al terminar de leer el archivo, pero se desplazaba durante la
+animacion de 400 ms posterior. La importacion ahora captura y restaura
+posicion, quaternion, vector `up`, target orbital y zoom. Tambien cancela un
+focus o zoom amortiguado pendiente. El atajo `F` conserva el encuadre manual.
+
+### Regresion
+
+`npm run test:geometry` ahora cubre, usando clicks y botones reales:
+
+- click junto a borde, extruir, undo, mismo click y segunda extrusion;
+- re-extrusion 3D en modos separado y unido;
+- igualdad de malla, huecos, islas y altura a traves de undo/redo;
+- descarte de la rama redo despues de una operacion nueva;
+- seleccion unificada;
+- ocultar, aislar, duplicar, borrar, cambiar color y agrupar;
+- camara antes, inmediatamente despues y 650 ms despues de importar.
+
+El delta de camara es `0` y todos los ciclos conservan firmas geometricas
+identicas. Las pruebas DXF/SVG y 3MF de `v1.0.4` siguen pasando sin cambios.
+Version HTML/Electron: `1.0.5`.
