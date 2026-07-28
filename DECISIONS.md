@@ -1182,3 +1182,74 @@ Electron con esa variable limpia y sale del proceso Node intermedio.
 **Release desktop:** GitHub Releases seguia en `v1.0.1`; no habia tag/release
 `v1.0.2`. Por lo tanto el cambio web no podia llegar a la app instalada por
 auto-update hasta publicar un nuevo release/installer.
+
+## 2026-07-28 -- v1.0.4: bordes compartidos sin huecos ni paredes residuales
+
+### Diagnostico corregido
+
+El doble contorno no era solamente visual ni demostraba que el diseño de
+Corel tuviera un objeto duplicado. El resolver de capas expandia
+`coveredAbove` en `0.04 mm` antes de restarlo de cada pieza inferior. La pieza
+superior conservaba su tamaño original, pero la inferior se recortaba 0.04 mm
+de mas: entre ambas quedaba un clearance fisico real, visible en 2D y
+exportable/extruible como hueco.
+
+La medicion automatizada lo reprodujo con dos rectangulos: el borde superior
+comenzaba en `x=5.00000` y el inferior terminaba en `x=4.96000`. En
+`Modelos/Tucan.dxf`, el mismo mecanismo eliminaba `7.40667 mm2` de area neta.
+
+### Solucion
+
+`SVGVisibleGeometry.resolve()` vuelve a realizar la resta booleana exacta:
+
+```text
+visible_i = painted_i - union(painted_above)
+```
+
+La expansion fisica de cobertura fue eliminada. Para conservar el objetivo
+del fix anterior (evitar paredes producidas por aproximaciones casi
+coincidentes), se agrego una regularizacion topologica localizada:
+
+- solo considera componentes conectados con ancho efectivo menor o igual a
+  `0.01 mm`;
+- exige que al menos 95% del componente este junto a una pieza superior;
+- transfiere ese residuo a la pieza superior mediante union booleana;
+- nunca borra el residuo dejando vacio, ni expande globalmente los contornos.
+
+Por eso el area total y la silueta exterior se conservan. Una forma fina pero
+separada de otra pieza tambien queda intacta.
+
+### Fronteras coincidentes de Corel
+
+Dos entidades geometricamente coincidentes no significan necesariamente dos
+objetos duplicados en el diseño. En un dibujo por capas, una misma frontera
+puede representar el hueco de una forma inferior y el borde de la forma
+superior. Los comentarios del parser ahora describen esta distincion para no
+volver a diagnosticar el archivo de Corel como duplicado sin evidencia.
+
+### SVG con clases CSS
+
+La misma revision encontro que Corel guarda los rellenos del Tucan SVG en
+clases CSS (`fil0` a `fil3`). `SVGLoader` r128 no aplicaba esas reglas a
+`path.color`, por lo que todas las piezas SVG llegaban negras. `SVGParser`
+ahora resuelve `fill` desde estilo inline, atributo directo o clases CSS del
+documento. El fixture conserva cuatro colores.
+
+### Prueba de regresion
+
+Se agrego `electron/tests/geometry-regression.js` y el comando
+`npm run test:geometry`. La prueba abre el HTML real en Electron y recorre:
+
+- borde compartido exacto: gap `0.00000 mm`;
+- residuo casi coincidente: reasignado sin perder area;
+- forma fina separada: preservada;
+- importacion real por la UI de `Tucan.dxf` y `Tucan.svg`;
+- extrusión separada de todas las regiones solidas;
+- generacion y lectura interna de ambos 3MF;
+- verificacion de mallas cerradas por aristas geometricas;
+- capturas 2D y 3D de ambos formatos.
+
+Resultados: DXF `17` contornos / `11` piezas / `4296` triangulos; SVG `19`
+contornos / `12` piezas / `12680` triangulos. En ambos casos:
+`0` mallas invalidas, `0` piezas fallidas al exportar y `0` aristas no
+manifold. Version HTML/Electron: `1.0.4`.

@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.3">
+<meta name="inkora-version" content="1.0.4">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -629,7 +629,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.3</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.4</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -802,7 +802,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.3').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.4').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -1675,16 +1675,14 @@ const DXFParser = (() => {
     return best || '';
   }
 
-  // La clave de dedup NO incluye color a propósito (a diferencia de antes,
-  // que usaba metaKey = layer+color). Corel puede exportar el MISMO trazo
-  // dos veces con distinto color -- confirmado con un caso real: dos
-  // LWPOLYLINE con handles distintos, mismos 33 vértices, distancia máxima
-  // entre ellos (probando todas las rotaciones y sentidos posibles del
-  // trazo cerrado) de 0.000000mm. Si la clave incluye color, ese par nunca
-  // se reconoce como duplicado y ambos quedan dibujados superpuestos —
-  // exactamente el "doble contorno" reportado. Layer sí se mantiene en la
-  // clave (más conservador: no asumir que capas distintas son siempre el
-  // mismo contorno, aunque en la práctica no hacía falta para este caso).
+  // La clave no incluye color. En diseños por capas o con curvas compuestas,
+  // un exportador puede emitir la misma FRONTERA geométrica para dos roles
+  // distintos (por ejemplo, hueco de una pieza inferior y borde de una
+  // pieza superior), incluso con colores diferentes. Eso no implica que el
+  // diseño de Corel tenga un objeto duplicado. El resolver de visibilidad
+  // reconstruye ambos lados del borde compartido a partir de la topología,
+  // así que la entrada cruda se consolida una sola vez. Layer sí permanece
+  // en la clave para no mezclar fronteras de capas distintas.
   function dedupeShapes(shapes) {
     const seen = new Map();
     const out = [];
@@ -2031,7 +2029,12 @@ const SVGVisibleGeometry = (() => {
   const SCALE = 10000;
   const CLEAN_DIST = 2;
   const MIN_AREA = 0.00001;
-  const COVER_TOLERANCE = 0.04; // mm: elimina paredes residuales por curvas casi coincidentes
+  // Ancho físico por debajo del cual una región conectada se considera un
+  // residuo de dos curvas destinadas a coincidir. No se usa para expandir
+  // ni contraer el diseño: el residuo se reasigna a la pieza superior, por
+  // lo que el área total y la silueta exterior permanecen invariantes.
+  const COINCIDENT_EDGE_WIDTH = 0.01;
+  const COINCIDENT_OWNER_OVERLAP = 0.95;
   let warnedMissingClipper = false;
 
   function stripClosingPoint(points) {
@@ -2164,6 +2167,82 @@ const SVGVisibleGeometry = (() => {
     return cleanPaths(solution, lib);
   }
 
+  function pathPerimeter(path) {
+    if (!path?.length) return 0;
+    let perimeter = 0;
+    for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+      const dx = path[i].X - path[j].X;
+      const dy = path[i].Y - path[j].Y;
+      perimeter += Math.hypot(dx, dy) / SCALE;
+    }
+    return perimeter;
+  }
+
+  function pathEffectiveWidth(path, lib) {
+    const perimeter = pathPerimeter(path);
+    return perimeter > 0 ? (2 * pathArea(path, lib)) / perimeter : Infinity;
+  }
+
+  // Una diferencia booleana exacta puede dejar una tira microscópica si dos
+  // curvas que conceptualmente comparten borde llegan con aproximaciones
+  // apenas distintas. Esa tira no se borra ni se convierte en clearance:
+  // se transfiere a la pieza superior que la bordea. Así desaparece la pared
+  // no imprimible, pero ambas piezas siguen cerrando sobre la misma frontera
+  // y no se pierde material entre extrusiones.
+  function regularizeCoincidentEdges(visible, itemIndex, visibleByPaintIndex, paintedByIndex, lib) {
+    if (!visible.length || itemIndex >= paintedByIndex.length - 1) return visible;
+    const hierarchy = pathParentHierarchy(visible, lib);
+    const hasChildren = new Set(
+      hierarchy.filter(item => item.parentIdx !== -1).map(item => item.parentIdx)
+    );
+    const transferred = new Set();
+    const expandedCache = new Map();
+
+    visible.forEach((path, pathIdx) => {
+      const topology = hierarchy[pathIdx];
+      if (topology.depth % 2 === 1 || hasChildren.has(pathIdx)) return;
+      if (pathEffectiveWidth(path, lib) > COINCIDENT_EDGE_WIDTH) return;
+
+      const area = pathArea(path, lib);
+      if (area <= 0) return;
+      let ownerIndex = -1;
+      let ownerFraction = 0;
+
+      // En un empate gana la capa superior más cercana: es la dueña natural
+      // del borde compartido según el orden de pintado.
+      for (let upperIndex = itemIndex + 1; upperIndex < paintedByIndex.length; upperIndex++) {
+        const upperPainted = paintedByIndex[upperIndex];
+        if (!upperPainted?.length) continue;
+        let expanded = expandedCache.get(upperIndex);
+        if (!expanded) {
+          expanded = offsetPaths(upperPainted, lib, COINCIDENT_EDGE_WIDTH);
+          expandedCache.set(upperIndex, expanded);
+        }
+        const intersection = clipPaths(lib, lib.ClipType.ctIntersection, [path], expanded);
+        const overlapArea = intersection.reduce((sum, part) => sum + pathArea(part, lib), 0);
+        const fraction = Math.min(1, overlapArea / area);
+        if (fraction > ownerFraction) {
+          ownerFraction = fraction;
+          ownerIndex = upperIndex;
+        }
+        if (fraction >= 1 - 1e-6) break;
+      }
+
+      if (ownerIndex === -1 || ownerFraction < COINCIDENT_OWNER_OVERLAP) return;
+      visibleByPaintIndex[ownerIndex] = clipPaths(
+        lib,
+        lib.ClipType.ctUnion,
+        visibleByPaintIndex[ownerIndex],
+        [path]
+      );
+      transferred.add(pathIdx);
+    });
+
+    return transferred.size
+      ? visible.filter((_, pathIdx) => !transferred.has(pathIdx))
+      : visible;
+  }
+
   function fallback(items) {
     const out = [];
     items.forEach(item => {
@@ -2182,7 +2261,7 @@ const SVGVisibleGeometry = (() => {
     return out;
   }
 
-  function resolve(items, opts = {}) {
+  function resolve(items) {
     const lib = globalThis.ClipperLib;
     if (!lib?.Clipper || !lib?.ClipType || !lib?.PolyFillType) {
       if (!warnedMissingClipper) {
@@ -2193,35 +2272,43 @@ const SVGVisibleGeometry = (() => {
     }
 
     const visibleByPaintIndex = new Array(items.length).fill(null).map(() => []);
+    const paintedByIndex = new Array(items.length).fill(null);
     let coveredAbove = [];
-    const coverTolerance = Number.isFinite(+opts.coverTolerance) ? +opts.coverTolerance : COVER_TOLERANCE;
 
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
       const painted = cleanPaths(item.rings.map(toClipperPath).filter(Boolean), lib);
       if (!painted.length) continue;
-      const coverage = (coverTolerance > 0 && coveredAbove.length)
-        ? offsetPaths(coveredAbove, lib, coverTolerance)
-        : coveredAbove;
+      paintedByIndex[i] = painted;
 
-      const visible = coverage.length
-        ? clipPaths(lib, lib.ClipType.ctDifference, painted, coverage)
+      let visible = coveredAbove.length
+        ? clipPaths(lib, lib.ClipType.ctDifference, painted, coveredAbove)
         : painted;
 
-      const hierarchy = pathParentHierarchy(visible, lib);
-      visibleByPaintIndex[i] = visible.map((path, pathIdx) => ({
-        shape: shapeFromPoints(fromClipperPath(path)),
-        layer: item.layer,
-        color: item.color,
-        elementId: visibleElementId(item.elementId, hierarchy, pathIdx),
-      })).filter(entry => entry.shape.curves.length >= 3);
+      visible = regularizeCoincidentEdges(
+        visible,
+        i,
+        visibleByPaintIndex,
+        paintedByIndex,
+        lib
+      );
+      visibleByPaintIndex[i] = visible;
 
       coveredAbove = coveredAbove.length
         ? clipPaths(lib, lib.ClipType.ctUnion, coveredAbove, painted)
         : clipPaths(lib, lib.ClipType.ctUnion, painted, []);
     }
 
-    return visibleByPaintIndex.flat();
+    return visibleByPaintIndex.flatMap((paths, paintIndex) => {
+      const item = items[paintIndex];
+      const hierarchy = pathParentHierarchy(paths, lib);
+      return paths.map((path, pathIdx) => ({
+        shape: shapeFromPoints(fromClipperPath(path)),
+        layer: item.layer,
+        color: item.color,
+        elementId: visibleElementId(item.elementId, hierarchy, pathIdx),
+      })).filter(entry => entry.shape.curves.length >= 3);
+    });
   }
 
   // Fracción del área de `childPts` que queda contenida dentro de `parentPts`
@@ -2283,6 +2370,56 @@ const SVGParser = (() => {
     return (widthMM && vbWidth) ? widthMM / vbWidth : 1;
   }
 
+  // CorelDRAW suele guardar los rellenos como clases CSS dentro de <defs>
+  // (.fil0, .fil1, ...). SVGLoader r128 aplana la geometría, pero no siempre
+  // aplica esas reglas a path.color; si se usa ese fallback a ciegas, todos
+  // los paths llegan negros. Resolvemos solo la propiedad fill necesaria,
+  // respetando primero style/fill directos y luego las clases del documento.
+  function parseClassFills(xml) {
+    const fills = new Map();
+    xml?.querySelectorAll?.('style').forEach(styleNode => {
+      const css = styleNode.textContent || '';
+      const rulePattern = /([^{}]+)\{([^{}]*)\}/g;
+      let rule;
+      while ((rule = rulePattern.exec(css))) {
+        const fillMatch = rule[2].match(/(?:^|;)\s*fill\s*:\s*([^;]+)/i);
+        if (!fillMatch) continue;
+        rule[1].split(',').forEach(selector => {
+          const classMatch = selector.trim().match(/^\.([A-Za-z_][\w-]*)$/);
+          if (classMatch) fills.set(classMatch[1], fillMatch[1].trim());
+        });
+      }
+    });
+    return fills;
+  }
+
+  function colorToHex(raw) {
+    const value = String(raw || '').trim();
+    if (!value || value.toLowerCase() === 'none') return null;
+    try {
+      const color = new THREE.Color();
+      color.setStyle(value);
+      return '#' + color.getHexString();
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveNodeFill(node, classFills, fallbackColor) {
+    const inlineStyle = node?.getAttribute?.('style') || '';
+    const inlineMatch = inlineStyle.match(/(?:^|;)\s*fill\s*:\s*([^;]+)/i);
+    const direct = inlineMatch?.[1] || node?.getAttribute?.('fill');
+    const directHex = colorToHex(direct);
+    if (directHex) return directHex;
+
+    const classes = String(node?.getAttribute?.('class') || '').trim().split(/\s+/).filter(Boolean);
+    for (let i = classes.length - 1; i >= 0; i--) {
+      const classHex = colorToHex(classFills.get(classes[i]));
+      if (classHex) return classHex;
+    }
+    return colorToHex(fallbackColor) || '#000000';
+  }
+
   function flattenToPoints(curvePath, scale) {
     const pts = curvePath.getPoints(SEGS);
     // SVG define Y hacia abajo; el resto de la app (igual que DXF) usa Y
@@ -2308,10 +2445,15 @@ const SVGParser = (() => {
     const loader = new THREE.SVGLoader();
     const data = loader.parse(text);
     const scale = computeScale(data.xml);
+    const classFills = parseClassFills(data.xml);
 
     const paintItems = [];
     data.paths.forEach((path, pi) => {
-      const colorHex = '#' + path.color.getHexString();
+      const colorHex = resolveNodeFill(
+        path.userData?.node,
+        classFills,
+        '#' + path.color.getHexString()
+      );
       const layer = path.userData?.node?.getAttribute?.('id') || `svg-${pi}`;
       const shapes = THREE.SVGLoader.createShapes(path);
       const item = { rings: [], layer, color: colorHex, elementId: `svg:${pi}` };
@@ -2330,13 +2472,10 @@ const SVGParser = (() => {
 
     if (!flat.length) return [];
 
-    // Corel puede exportar el mismo trazo dos veces (distinto <path>, mismo
-    // contorno geométrico) con distinto color -- mismo caso confirmado en
-    // DXF, ver DXFParser.dedupeShapes. Se reusa esa función en vez de
-    // reimplementar la comparación de geometría: se le "presta" el shape
-    // resuelto con layer/color en userData (formato que ya espera), y se
-    // reconstruye el resto de los datos (elementId, etc.) para los que
-    // sobreviven.
+    // Una misma frontera puede aparecer en varios roles de un diseño por
+    // capas (hueco inferior y pieza superior). No son necesariamente
+    // objetos duplicados en Corel. Se consolida la entrada coincidente y la
+    // topología visible conserva ambos lados del borde compartido.
     flat.forEach(f => { f.shape.userData = { layer: f.layer, color: f.color }; });
     const flatByShape = new Map(flat.map(f => [f.shape, f]));
     flat = DXFParser.dedupeShapes(flat.map(f => f.shape)).map(sh => {

@@ -1,11 +1,12 @@
 {
   "name": "inkora-3d-modeler-desktop",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "INKORA 3D Modeler empaquetado como app de escritorio (Electron).",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test:geometry": "electron tests/geometry-regression.js",
     "dist:test": "electron-builder --win --dir",
     "dist:installer": "electron-builder --win nsis",
     "dist:publish": "electron-builder --win nsis --publish always"
@@ -15,7 +16,7 @@
   },
   "devDependencies": {
     "electron": "^31.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "26.15.3"
   },
   "build": {
     "appId": "com.inkora.modeler3d",
@@ -45,8 +46,12 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        { "target": "dir" },
-        { "target": "nsis" }
+        {
+          "target": "dir"
+        },
+        {
+          "target": "nsis"
+        }
       ]
     },
     "nsis": {
