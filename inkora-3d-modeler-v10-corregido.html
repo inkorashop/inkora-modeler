@@ -2694,22 +2694,21 @@ const Viewport = (() => {
           const b2 = ( origHex        & 0xff) / 255;
           const lum2 = 0.299*r2 + 0.587*g2 + 0.114*b2;
           const target2 = lum2 > 0.45 ? 0x000000 : 0xffffff;
-          mesh.material.color.setHex(origHex).lerp(new THREE.Color(target2), HIGHLIGHT_MIX_HOVER);
+          mesh.material.color.setHex(origHex).lerp(new THREE.Color(target2), HIGHLIGHT_MIX_HOVER_2D);
           mesh.material.colorWrite = true;
           mesh.material.opacity = Math.min(0.92, mesh.userData._hoverOrigOpacity + 0.18);
         } else {
-          if (mesh.userData._hoverOrigColor != null) {
-            mesh.material.color.setHex(mesh.userData._hoverOrigColor);
-            delete mesh.userData._hoverOrigColor;
-          }
-          if (mesh.userData._hoverOrigOpacity !== undefined) {
-            mesh.material.opacity = mesh.userData._hoverOrigOpacity;
-            delete mesh.userData._hoverOrigOpacity;
-          }
-          if (mesh.userData._hoverOrigColorWrite !== undefined) {
-            mesh.material.colorWrite = mesh.userData._hoverOrigColorWrite;
-            delete mesh.userData._hoverOrigColorWrite;
-          }
+          // No restaurar el snapshot de "antes de hoverear" a ciegas: si el
+          // usuario seleccionó este contorno (sel2D) mientras el mouse seguía
+          // encima, ese snapshot quedó desactualizado (capturado ANTES de la
+          // selección) y restaurarlo apagaba el resaltado de selección
+          // aunque siguiera seleccionado. En cambio, dejar que
+          // PanelUI.refreshContourVisuals() reponga el estado que le
+          // corresponde AHORA (seleccionado o no) — única fuente de verdad.
+          delete mesh.userData._hoverOrigColor;
+          delete mesh.userData._hoverOrigOpacity;
+          delete mesh.userData._hoverOrigColorWrite;
+          PanelUI.refreshContourVisuals();
         }
       }
     }
@@ -2761,6 +2760,12 @@ const Viewport = (() => {
   const HIGHLIGHT_GLOW_HOVER = 0.18;
   const HIGHLIGHT_GLOW_SELECT = 0.40;
   const HIGHLIGHT_GLOW_TINT = 0.5; // qué tan cerca de blanco queda el glow teñido
+  // Contornos 2D no extruidos (MeshBasicMaterial, sin luces ni tonemap): no
+  // sufren el problema de arriba, un solo valor moderado ya se ve bien (ver
+  // setHoverVisual, rama 2D). Antes se llamaba HIGHLIGHT_MIX_HOVER; quedó
+  // huérfana (ReferenceError silencioso en cada hover 2D) al renombrar las
+  // constantes de arriba sin actualizar esta referencia.
+  const HIGHLIGHT_MIX_HOVER_2D = 0.22;
   // Aplica highlight adaptativo (hover=suave, select=fuerte) según luminancia
   // del color base — oscurece por mezcla real de color si es claro, agrega
   // un glow teñido con el propio tono si es oscuro/saturado.
@@ -2985,8 +2990,20 @@ const GeoModule = (() => {
   let _pieceCounter = 0;
   function resetCounter() { _pieceCounter = 0; }
 
-  function makeFlat(shape,offX,offY,color='#555566'){
-    const geo=new THREE.ShapeGeometry(shape);
+  // holeShapes: contornos hijos directos (huecos) a recortar del relleno de
+  // este mesh. Sin esto, el relleno de selección/hover cubre toda el área
+  // del shape exterior incluso donde hay otro contorno dibujado encima
+  // (ej. la pupila de un ojo) — se ve como si esas piezas internas también
+  // se hubieran resaltado. Se clona el shape para no mutar el original
+  // (el mismo objeto `shape` se reusa para jerarquía y extrusión, que no
+  // deben ver estos holes "solo visuales").
+  function makeFlat(shape,offX,offY,color='#555566',holeShapes){
+    let displayShape = shape;
+    if (holeShapes && holeShapes.length) {
+      displayShape = shape.clone();
+      displayShape.holes = holeShapes.map(h => WindingUtils.makeHoleCW(h));
+    }
+    const geo=new THREE.ShapeGeometry(displayShape);
     const idx = _pieceCounter++;
     const mat=new THREE.MeshBasicMaterial({
       color:new THREE.Color(color),
@@ -6662,6 +6679,14 @@ const PanelUI = (() => {
     // a lo que volver, así que "deshacer" no hacía nada).
     History.push(State);
     State.filename=filename;
+    // Huecos DIRECTOS de cada contorno (mismo criterio que absorbChildren al
+    // extruir): solo hijos con depth+1, no toda la descendencia. Se calcula
+    // una vez antes del loop porque necesita ver todo shapeData completo.
+    const directHolesOf = shapeData.map((sd, i) =>
+      shapeData
+        .filter(child => child.parentIdx === i && child.depth === sd.depth + 1)
+        .map(child => child.shape)
+    );
     shapeData.forEach(({shape,offX,offY,depth,parentIdx,layer,color,elementId},i)=>{
       // color se guarda TAL CUAL viene (puede ser null = "sin color
       // explícito"). No se hornea el default acá — así, si el usuario
@@ -6669,7 +6694,7 @@ const PanelUI = (() => {
       // vuelve a resolverlo con Utils.defaultContourColor() y sigue
       // viéndose bien en el tema nuevo.
       const dxfColor = Utils.contourDisplayColor(color);
-      const flatMesh=GeoModule.makeFlat(shape,offX,offY,dxfColor);
+      const flatMesh=GeoModule.makeFlat(shape,offX,offY,dxfColor,directHolesOf[i]);
       const outlineMesh=GeoModule.makeOutline(shape,offX,offY,dxfColor);
       Viewport.add2D(flatMesh);Viewport.add2D(outlineMesh);
       // depth y parentIdx vienen del parser: permiten saber si este contorno
@@ -7052,6 +7077,14 @@ const PanelUI = (() => {
               Number.isFinite(Number(island.depth)) &&
               Number(island.depth) !== Number(hole.depth) + 1) return;
           if (selectedSourceIdxs.has(islandIdx)) return;
+          // Si esta isla ya tiene su propia pieza 3D (extruida por separado,
+          // ej. la pupila de un ojo extruida después del anillo), NO
+          // agregarla de nuevo acá — si no, una re-extrusión de la cara
+          // exterior la duplica como sólido dentro de este composite,
+          // tapando el hueco donde ya vive su propia pieza independiente.
+          // absorbChildren (primera extrusión) ya hace este mismo chequeo;
+          // a esta función (re-extrusión) le faltaba.
+          if (island.piece) return;
 
           const islandShape = WindingUtils.makeShapeCCW(island.shape);
           addFaceTopology(

@@ -940,3 +940,117 @@ Sin errores de consola en ningún caso. Sintaxis del archivo completo
 validada con `node --check`. El caso SVG no se tocó (ningún cambio en
 `SVGParser` ni en `SVGVisibleGeometry.resolve()`, solo se le agregó la
 función `overlapFraction`, aditiva).
+
+## 2026-07-25 (seguimiento) — Tres bugs relacionados con piezas anidadas (ojo/pupila)
+
+Reportados juntos usando el caso del ojo del tucán (anillo exterior +
+pupila interior), probando en el navegador antes de tocar nada.
+
+### 1. Re-extrusión de una cara con una pieza interior ya extruida la duplicaba
+
+**Síntoma:** extruir el anillo del ojo, extruir la pupila por separado
+(funciona bien, igual que siempre) — pero volver a extruir la cara
+superior del anillo (re-extrusión) convertía el anillo en un cilindro
+sólido sin hueco, como si la pupila nunca hubiera existido.
+
+**Causa:** `absorbChildren` (primera extrusión) y `addFaceTopology`
+(re-extrusión) hacen básicamente lo mismo — recorrer huecos/islas de un
+contorno para armar el `compositeShape` — pero `absorbChildren` chequea
+`if (candidate.extruded) return` / `if (island.extruded) return` antes de
+absorber algo, y `addFaceTopology` no tenía ningún chequeo equivalente.
+Al re-extruir, volvía a "absorber" la pupila como si fuera una isla nueva
+sin pieza propia, duplicándola dentro del composite del anillo — aunque
+ya tenía su propia pieza 3D independiente.
+
+**Fix:** un chequeo (`if (island.piece) return;`) en el loop de islas de
+`addFaceTopology`, mismo criterio que ya usaba `absorbChildren` (no
+duplicar algo que ya tiene su propia pieza), pero sin tocar el hueco en
+sí — el hueco (`hole`) sigue agregándose siempre, porque ese sí necesita
+recortarse de nuevo en cada re-extrusión.
+
+### 2. Hover en contornos 2D (sin extruir) no hacía nada — `ReferenceError` silencioso
+
+**Síntoma:** pasar el mouse sobre un contorno 2D sin extruir no mostraba
+ningún resalte suave.
+
+**Causa:** al recalibrar el highlight adaptativo de piezas 3D (entrada
+anterior de este mismo día), se renombraron las constantes
+`HIGHLIGHT_MIX_HOVER`/`HIGHLIGHT_MIX_SELECT` a
+`HIGHLIGHT_DARKEN_*`/`HIGHLIGHT_GLOW_*` — pero la rama 2D de
+`setHoverVisual` (una implementación separada, para `MeshBasicMaterial`
+sin luces, que nunca tuvo el problema de tonemapping) seguía referenciando
+el nombre viejo `HIGHLIGHT_MIX_HOVER`, que ya no existía. Cada hover sobre
+un contorno 2D tiraba un `ReferenceError` dentro del handler de
+`mousemove` — silencioso para el usuario (no rompe la página, solo aborta
+ese frame de highlight) pero con el efecto observado de "no pasa nada".
+
+**Fix:** se restauró la constante con nombre propio,
+`HIGHLIGHT_MIX_HOVER_2D = 0.22` (el valor correcto para este caso, ya
+confirmado en la entrada anterior — 2D no sufre el problema de
+tonemapping de las piezas 3D).
+
+### 3. El resaltado de selección 2D desaparecía al sacar el mouse (aunque siguiera seleccionado)
+
+**Síntoma:** seleccionar un contorno 2D resalta fuerte (bien) — pero al
+sacar el mouse de encima, el resaltado desaparecía por completo, aunque
+el contorno seguía seleccionado.
+
+**Causa:** la rama 2D de `setHoverVisual`, al terminar el hover,
+restauraba un *snapshot* de color/opacidad capturado al EMPEZAR el hover
+(`_hoverOrigColor`/`_hoverOrigOpacity`). Si la selección cambiaba
+*mientras* el mouse seguía encima (flujo normal: pasar el mouse, ya
+resaltado suave, hacer click para seleccionar) ese snapshot quedaba
+desactualizado — capturado ANTES del click, con la apariencia
+"sin seleccionar" (opacity 0). Al sacar el mouse después, se restauraba
+ese snapshot viejo en vez del estado real, apagando el resaltado de
+selección.
+
+**Fix:** en vez de restaurar un snapshot cacheado, la rama de "hover
+termina" ahora llama a `PanelUI.refreshContourVisuals()` — la única
+fuente de verdad de "cómo se ve este contorno ahora" (seleccionado o no).
+Elimina la necesidad de rastrear un snapshot para el caso de apagado.
+
+### 4. El resaltado de selección se "salía" del contorno real (bleed hacia piezas internas)
+
+**Síntoma:** seleccionar un contorno grande (ej. la cabeza) pinta su
+relleno sobre toda el área geométrica, incluida la zona donde hay otros
+contornos dibujados encima (ojo, pupila) — se ve como si esas piezas
+internas también estuvieran resaltadas.
+
+**Causa:** `GeoModule.makeFlat` construye la geometría del mesh 2D
+(`flatMesh`, el que recibe el relleno de hover/selección) directamente
+del `shape` importado, sin huecos — a diferencia de la extrusión, que sí
+arma un `compositeShape` con huecos reales (`absorbChildren`), el mesh de
+DISPLAY nunca tuvo ese tratamiento.
+
+**Fix:** `makeFlat` ahora acepta un array opcional de huecos
+(`holeShapes`); si se pasa, clona el shape (para no mutar el original,
+que se sigue usando tal cual para jerarquía y extrusión) y le agrega esos
+huecos antes de construir la geometría. `populateShapeData` (el import de
+DXF/SVG) calcula los huecos DIRECTOS de cada contorno (mismo criterio de
+un nivel que usa `absorbChildren`: hijos con `depth+1`, no toda la
+descendencia) antes del loop de creación, y se los pasa a `makeFlat`.
+
+**Alcance:** solo se tocó el import inicial (`populateShapeData`). El
+otro sitio que construye `flatMesh` (restaurar un proyecto guardado,
+`inkora3d`/`.json`) no se tocó — queda pendiente si hace falta el mismo
+tratamiento ahí.
+
+### Verificación
+
+Con Chrome DevTools MCP, reproduciendo el caso del ojo (anillo idx12 +
+pupila idx8) paso a paso:
+
+- Re-extrusión: antes, el anillo perdía el hueco (cilindro sólido).
+  Después, conserva el hueco real con la pupila visible adentro
+  (confirmado por captura de pantalla con zoom).
+- Hover 2D: antes tiraba `ReferenceError` (confirmado leyendo el código —
+  la constante no existía). Después, opacity pasa de 0 a 0.18 sin error.
+- Selección 2D + mouse afuera: antes volvía a opacity 0 (invisible).
+  Después mantiene opacity 0.22 / color `#7c6cff` sin cambios.
+- Relleno de selección: confirmado por captura con zoom que el relleno de
+  la cabeza (idx6) deja un hueco limpio exactamente donde está el ojo,
+  sin bleed.
+
+Sin errores de consola nuevos en ningún caso. Sintaxis del archivo
+completo validada con `node --check`.
