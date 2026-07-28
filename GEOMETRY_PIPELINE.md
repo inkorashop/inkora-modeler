@@ -369,3 +369,10 @@ y un laminado real de Bambu Studio con la opcion activada. Una separacion
 vertical real puede producir una advertencia de voladizo flotante en el
 laminador; es una consecuencia esperada de activar holgura en todas las
 direcciones, no una malla abierta.
+
+Desde `v1.0.8`, `g` es configurable desde la cabecera y `0.001 mm` queda como
+valor inicial, no como constante geometrica. La entrada acepta coma o punto,
+se limita a seis decimales para coincidir con la cuantizacion del XML y debe
+ser mayor que cero cuando el switch esta activo. Descarga y apertura en
+laminador consumen el mismo valor validado. Apagar el switch mantiene
+`clearanceMm: 0` y, por contrato, evita por completo la contraccion.

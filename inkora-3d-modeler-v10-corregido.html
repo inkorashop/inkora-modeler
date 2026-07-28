@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.7">
+<meta name="inkora-version" content="1.0.8">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -155,15 +155,34 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .btn.danger{border-color:rgba(255,79,79,.4);color:var(--danger);background:transparent}
 .btn.danger:hover{background:rgba(255,79,79,.08);border-color:var(--danger)}
 .export-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}
+.export-gap-control{display:flex;align-items:center;gap:2px;flex-shrink:0}
 .export-gap-toggle{
-  min-width:43px;justify-content:center;padding-left:7px;padding-right:7px;
+  width:28px;min-width:28px;justify-content:center;padding-left:0;padding-right:0;
   color:var(--text-faint);
 }
 .export-gap-toggle svg{width:11px;height:11px;flex-shrink:0}
-.export-gap-toggle span{font-size:8px}
 .export-gap-toggle[aria-checked="true"]{
   color:var(--accent);border-color:var(--accent);
   background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.08);
+}
+.export-gap-value-wrap{
+  height:27px;display:flex;align-items:center;gap:3px;padding:0 6px;
+  border:1px solid var(--border);border-radius:var(--r);background:transparent;
+  color:var(--text-faint);transition:border-color .15s,color .15s,opacity .15s;
+}
+.export-gap-control[data-enabled="false"] .export-gap-value-wrap{opacity:.52}
+.export-gap-value-wrap:focus-within{
+  color:var(--text-dim);border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18);
+}
+.export-gap-value{
+  width:43px;padding:0;border:0;outline:0;background:transparent;color:var(--text);
+  font-family:var(--mono);font-size:9px;text-align:right;letter-spacing:0;
+}
+.export-gap-value::selection{background:rgba(var(--accent-rgb),.3)}
+.export-gap-unit{font-size:8px;color:inherit;user-select:none}
+.export-gap-value-wrap:has(.export-gap-value[aria-invalid="true"]){
+  border-color:var(--danger);box-shadow:0 0 0 2px rgba(255,79,79,.12);
 }
 
 /* ── Undo / Redo ── */
@@ -640,7 +659,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.7</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.8</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -674,12 +693,22 @@ html.light{
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
         Exportar 3MF
       </button>
-      <button class="btn export-gap-toggle" id="btn-export-gap" type="button" role="switch"
-              aria-checked="false" aria-label="Separacion de 0,001 mm entre piezas al exportar"
-              title="Separacion de 0,001 mm entre piezas al exportar: desactivada">
-        <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2 1.5 6l3 4M7.5 2l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>0,001</span>
-      </button>
+      <div class="export-gap-control" id="export-gap-control" data-enabled="false">
+        <button class="btn export-gap-toggle" id="btn-export-gap" type="button" role="switch"
+                aria-checked="false" aria-controls="export-gap-value"
+                aria-label="Separacion entre piezas al exportar"
+                title="Separacion entre piezas al exportar: desactivada">
+          <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2 1.5 6l3 4M7.5 2l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <label class="export-gap-value-wrap" for="export-gap-value"
+               title="Distancia vacia entre piezas en el 3MF exportado">
+          <input class="export-gap-value" id="export-gap-value" type="text"
+                 inputmode="decimal" autocomplete="off" spellcheck="false"
+                 value="0,001" aria-label="Separacion entre piezas en milimetros"
+                 aria-describedby="export-gap-unit" aria-invalid="false">
+          <span class="export-gap-unit" id="export-gap-unit">mm</span>
+        </label>
+      </div>
     </div>
     <div id="slicer-wrap">
       <button class="btn" id="btn-slicer" disabled title="Abrir este 3MF en un laminador instalado">
@@ -821,7 +850,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.7').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.8').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -8105,23 +8134,74 @@ const PanelUI = (() => {
     Utils.toast('Escena limpiada.');
   });
 
-  const EXPORT_CLEARANCE_MM = 0.001;
+  const DEFAULT_EXPORT_CLEARANCE_MM = 0.001;
   let exportClearanceEnabled = false;
   const exportGapButton = document.getElementById('btn-export-gap');
+  const exportGapControl = document.getElementById('export-gap-control');
+  const exportGapInput = document.getElementById('export-gap-value');
+
+  function parseExportClearance(value) {
+    const normalized = String(value ?? '').trim().replace(',', '.');
+    if (!/^(?:\d+(?:\.\d{0,6})?|\.\d{1,6})$/.test(normalized)) return NaN;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : NaN;
+  }
+
+  function formatExportClearance(value) {
+    return Number(value).toFixed(6).replace(/0+$/, '').replace(/\.$/, '').replace('.', ',');
+  }
+
+  function validateExportClearance() {
+    const value = parseExportClearance(exportGapInput?.value);
+    const valid = Number.isFinite(value);
+    exportGapInput?.setAttribute('aria-invalid', String(!valid));
+    return valid ? value : NaN;
+  }
+
+  function refreshExportClearanceUI() {
+    const value = validateExportClearance();
+    const valueLabel = Number.isFinite(value)
+      ? `${formatExportClearance(value)} mm`
+      : 'valor invalido';
+    exportGapControl?.setAttribute('data-enabled', String(exportClearanceEnabled));
+    exportGapButton?.setAttribute('aria-checked', String(exportClearanceEnabled));
+    if (exportGapButton) {
+      exportGapButton.title =
+        `Separacion de ${valueLabel} entre piezas al exportar: ` +
+        (exportClearanceEnabled ? 'activada' : 'desactivada');
+    }
+  }
 
   function currentExportOptions() {
+    if (!exportClearanceEnabled) return { clearanceMm: 0 };
+    const clearanceMm = validateExportClearance();
+    if (!Number.isFinite(clearanceMm)) {
+      exportGapInput?.focus();
+      throw new Error(
+        'La separacion debe ser mayor que 0 mm y tener como maximo 6 decimales.'
+      );
+    }
     return {
-      clearanceMm: exportClearanceEnabled ? EXPORT_CLEARANCE_MM : 0,
+      clearanceMm,
     };
   }
 
   exportGapButton?.addEventListener('click', () => {
     exportClearanceEnabled = !exportClearanceEnabled;
-    exportGapButton.setAttribute('aria-checked', String(exportClearanceEnabled));
-    exportGapButton.title =
-      `Separacion de 0,001 mm entre piezas al exportar: ` +
-      (exportClearanceEnabled ? 'activada' : 'desactivada');
+    refreshExportClearanceUI();
   });
+
+  exportGapInput?.addEventListener('input', refreshExportClearanceUI);
+  exportGapInput?.addEventListener('blur', () => {
+    const value = validateExportClearance();
+    if (Number.isFinite(value)) exportGapInput.value = formatExportClearance(value);
+    refreshExportClearanceUI();
+  });
+  exportGapInput?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') exportGapInput.blur();
+  });
+  exportGapInput.value = formatExportClearance(DEFAULT_EXPORT_CLEARANCE_MM);
+  refreshExportClearanceUI();
 
   document.getElementById('btn-export').addEventListener('click',async()=>{
     if(!State.pieces.length)return;

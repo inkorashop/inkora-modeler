@@ -1438,3 +1438,22 @@ errores manifold. El Tucan con holgura mantiene `12` volumenes, `3` materiales
 y `5752` triangulos; Bambu Studio lo inspecciona y lamina correctamente. Puede
 advertir sobre voladizos flotantes por la separacion vertical solicitada.
 Version HTML/Electron: `1.0.7`.
+
+## 2026-07-28 -- v1.0.8: holgura 3MF configurable
+
+El switch de separacion conserva `0.001 mm` como valor inicial, pero la
+distancia ahora se edita junto al control. Acepta coma o punto decimal y hasta
+seis decimales, que es la precision usada al serializar vertices en el 3MF.
+Con el switch activo se exige un valor finito mayor que cero; un dato invalido
+se marca en el campo y bloquea la exportacion con un mensaje concreto.
+
+La configuracion sigue entrando por `currentExportOptions()`, fuente comun de
+`Exportar 3MF` y `Abrir en laminador`. No se agrego un segundo camino ni se
+modifico `State`: cambiar el valor solo afecta al blob que se esta generando.
+Con el switch apagado se envia exactamente `clearanceMm: 0`, aunque el campo
+mantenga otro valor preparado para una exportacion posterior.
+
+La regresion opera el control real, escribe `0,0025` y comprueba que el
+exportador recibe `0.0025`. Tambien conserva las mediciones sinteticas de
+contacto lateral/vertical, la invariancia del proyecto, el contrato manifold
+y el laminado real del Tucan en Bambu Studio. Version HTML/Electron: `1.0.8`.

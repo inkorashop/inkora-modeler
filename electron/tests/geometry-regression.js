@@ -786,11 +786,39 @@ async function collectMetrics(win) {
         makePiece(rectangle(0, 0, 10, 10), 'Superior', '#222222', 1),
       ];
       const toggle = document.getElementById('btn-export-gap');
+      const input = document.getElementById('export-gap-value');
+      const exportButton = document.getElementById('btn-export');
       const toggleInitial = toggle?.getAttribute('aria-checked');
+      const inputInitial = input?.value;
+      let customUiClearance = null;
+      const originalExportMeshes = Exporter.exportMeshes;
+      if (input) {
+        input.value = '0,0025';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       toggle?.click();
       const toggleEnabled = toggle?.getAttribute('aria-checked');
+      try {
+        Exporter.exportMeshes = async (exportPieces, filename, options) => {
+          customUiClearance = options?.clearanceMm ?? null;
+          return {
+            failedCount: 0,
+            totalCount: exportPieces.length,
+            filename,
+          };
+        };
+        exportButton?.click();
+        await new Promise(resolve => setTimeout(resolve, 20));
+      } finally {
+        Exporter.exportMeshes = originalExportMeshes;
+      }
       toggle?.click();
       const toggleRestored = toggle?.getAttribute('aria-checked');
+      if (input) {
+        input.value = '0,001';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('blur'));
+      }
       const pieceSignaturesBefore = pieces.map(pieceSignature);
       const plain = await Exporter.generate3MFBlob(
         pieces,
@@ -814,6 +842,10 @@ async function collectMetrics(win) {
         toggleInitial,
         toggleEnabled,
         toggleRestored,
+        inputInitial,
+        inputRestored: input?.value,
+        inputValid: input?.getAttribute('aria-invalid'),
+        customUiClearance,
         optionOff: plain.clearanceMm,
         optionOn: cleared.clearanceMm,
         plainSideGap: rounded(plainBounds[1].min[0] - plainBounds[0].max[0]),
@@ -1334,6 +1366,12 @@ function validate(metrics) {
       clearance.toggleEnabled !== 'true' ||
       clearance.toggleRestored !== 'false') {
     failures.push('el control de separacion 3MF no alterna su estado correctamente');
+  }
+  if (clearance.inputInitial !== '0,001' ||
+      clearance.inputRestored !== '0,001' ||
+      clearance.inputValid !== 'false' ||
+      clearance.customUiClearance !== 0.0025) {
+    failures.push('el valor editable de separacion 3MF no llega correctamente al exportador');
   }
   if (clearance.optionOff !== 0 ||
       !nearlyEqual(clearance.plainSideGap, 0, 0.000001) ||
