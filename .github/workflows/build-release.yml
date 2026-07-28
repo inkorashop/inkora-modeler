@@ -43,15 +43,57 @@ jobs:
         run: npx electron-builder --win nsis --publish never
 
       - name: Publicar release completo
-        uses: softprops/action-gh-release@v3
-        with:
-          token: ${{ github.token }}
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.package.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          name: INKORA 3D Modeler v${{ steps.package.outputs.version }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            electron/dist/INKORA-3D-Modeler-Setup.exe
-            electron/dist/INKORA-3D-Modeler-Setup.exe.blockmap
-            electron/dist/latest.yml
+        working-directory: electron
+        shell: pwsh
+        run: |
+          $version = '${{ steps.package.outputs.version }}'
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $env:GITHUB_REF_NAME
+          } else {
+            '${{ steps.package.outputs.tag }}'
+          }
+          $repo = $env:GITHUB_REPOSITORY
+          $required = @(
+            'INKORA-3D-Modeler-Setup.exe',
+            'INKORA-3D-Modeler-Setup.exe.blockmap',
+            'latest.yml'
+          )
+
+          $releaseTags = @(
+            gh release list --repo $repo --limit 100 --json tagName --jq '.[].tagName'
+          )
+          if ($LASTEXITCODE -ne 0) {
+            throw 'No se pudo consultar la lista de releases.'
+          }
+
+          if ($releaseTags -notcontains $tag) {
+            gh release create $tag `
+              --repo $repo `
+              --target $env:GITHUB_SHA `
+              --title "INKORA 3D Modeler v$version" `
+              --generate-notes
+            if ($LASTEXITCODE -ne 0) {
+              throw "No se pudo crear el release $tag."
+            }
+          }
+
+          gh release upload $tag `
+            'dist/INKORA-3D-Modeler-Setup.exe' `
+            'dist/INKORA-3D-Modeler-Setup.exe.blockmap' `
+            'dist/latest.yml' `
+            --repo $repo `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "No se pudieron publicar los artefactos de $tag."
+          }
+
+          $published = @(
+            gh release view $tag --repo $repo --json assets --jq '.assets[].name'
+          )
+          $missing = @($required | Where-Object { $published -notcontains $_ })
+          if ($missing.Count) {
+            throw "Faltan artefactos publicados: $($missing -join ', ')"
+          }
+          Write-Host "Release $tag completo: $($required -join ', ')"
+        env:
+          GH_TOKEN: ${{ github.token }}

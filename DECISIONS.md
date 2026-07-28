@@ -1555,7 +1555,11 @@ Para no repetir ese falso positivo, el workflow ya no usa
 
 1. compila con `--publish never`;
 2. obtiene version/tag desde `package.json`;
-3. una unica accion publica los tres artefactos declarados;
-4. `fail_on_unmatched_files` hace fallar el job si falta cualquiera.
+3. consulta si el release ya existe y solo lo crea cuando falta;
+4. un unico comando reemplaza los tres artefactos declarados;
+5. vuelve a listar los assets y hace fallar el job si falta cualquiera.
 
-Esto separa compilacion de distribucion y evita carreras al crear el release.
+La ruta de release existente evita actualizar metadatos: GitHub devuelve
+`422 tag_name already_exists` al intentar ese `PATCH` en este repositorio,
+pero permite reemplazar assets. Esto separa compilacion de distribucion,
+evita carreras al crear el release y permite reintentos idempotentes.
