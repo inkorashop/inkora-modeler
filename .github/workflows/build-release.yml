@@ -18,10 +18,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
@@ -29,8 +29,29 @@ jobs:
         working-directory: electron
         run: npm install
 
-      - name: Compilar y publicar instalador a GitHub Releases
+      - name: Leer version del paquete
+        id: package
         working-directory: electron
-        run: npx electron-builder --win nsis --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+
+      - name: Compilar instalador
+        working-directory: electron
+        run: npx electron-builder --win nsis --publish never
+
+      - name: Publicar release completo
+        uses: softprops/action-gh-release@v3
+        with:
+          token: ${{ github.token }}
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || steps.package.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: INKORA 3D Modeler v${{ steps.package.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            electron/dist/INKORA-3D-Modeler-Setup.exe
+            electron/dist/INKORA-3D-Modeler-Setup.exe.blockmap
+            electron/dist/latest.yml

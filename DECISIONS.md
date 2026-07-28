@@ -1541,3 +1541,21 @@ SVG `19` contornos / `12` piezas / `12680` triangulos. Todos los 3MF tienen
 cero aristas abiertas/no-manifold, winding coherente y volumen positivo.
 Bambu Studio reconoce una raiz, lamina un objeto y genera G-code. Version
 HTML/Electron: `1.0.9`.
+
+### Publicacion atomica del release
+
+El primer workflow de `v1.0.9` termino con estado exitoso, pero el log mostro
+dos instancias concurrentes del publicador de `electron-builder`. Ambas
+intentaron crear el mismo release; GitHub conservo inicialmente solo el
+blockmap y no rechazo el job. El release se reparo subiendo manualmente el
+instalador probado, su blockmap correspondiente y `latest.yml`.
+
+Para no repetir ese falso positivo, el workflow ya no usa
+`electron-builder --publish always`. Ahora:
+
+1. compila con `--publish never`;
+2. obtiene version/tag desde `package.json`;
+3. una unica accion publica los tres artefactos declarados;
+4. `fail_on_unmatched_files` hace fallar el job si falta cualquiera.
+
+Esto separa compilacion de distribucion y evita carreras al crear el release.
