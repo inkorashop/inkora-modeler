@@ -268,6 +268,18 @@ Importar DXF/SVG no encuadra la escena. Debe preservar posicion, orientacion,
 target orbital y zoom, ademas de cancelar animaciones pendientes. El encuadre
 continua siendo una accion explicita mediante `F`.
 
+Desde `v1.0.11`, extruir deja seleccionada la extrusion recien creada: una
+pieza en modo unido, todas las nuevas en modo separado. Se resuelve por
+identidad de pieza y no por rango de indices, porque una pieza 3D agrega su
+propio contorno ficticio al final mientras que una 2D reusa el de origen. La
+seleccion se aplica antes del snapshot para que `Ctrl+Z` y `Ctrl+Y` la
+restauren igual.
+
+Esto convierte "extruir dos veces seguidas" en un flujo normal, no en un caso
+raro. Por eso la re-extrusion sobre caras 3D usa el mismo criterio que la 2D:
+una cara cuyos huecos cubren todo su material propio se descarta y se informa,
+en vez de abortar la operacion entera.
+
 ## 10. Solido canonico y contrato 3MF
 
 Desde `v1.0.6`, una pieza unida no es una lista de shapes que se extruyen en
@@ -299,6 +311,32 @@ Un punto donde un hueco toca exactamente su exterior no representa un solido
 2-manifold extruible. `regularizeTouchingHole()` mueve solo ese vertice hacia
 el interior valido, buscando desde el paso minimo de la grilla. No debe
 aplicarse a huecos separados ni convertirse en una tolerancia general.
+
+### Etapa geometrica y serializadores
+
+Desde `v1.0.11` la exportacion tiene dos etapas separadas:
+
+```text
+buildExportRecords()          <- geometria, comun a todos los formatos
+  -> solido canonico por pieza
+  -> contrato manifold
+  -> holgura opcional
+  -> apoyo en el piso
+generate3MFBlob() / generateOBJFiles()   <- un serializador por formato
+```
+
+Ningun serializador puede construir su propia geometria. Un fallo antes del
+corte es geometrico y afecta a los dos formatos; un fallo despues pertenece
+a un solo serializador y se corrige sin tocar el otro. El orden de colores
+unicos sale de la etapa comun, asi que una pieza cae en el mismo filamento
+en 3MF y en OBJ.
+
+El OBJ no transporta color: va en un `.mtl` hermano que el laminador busca
+por el nombre exacto declarado en `mtllib`, en la misma carpeta. Los dos
+archivos son inseparables. Sus indices son globales al archivo y empiezan en
+1, no por objeto como en 3MF: cada pieza acumula el offset de las anteriores.
+Se agrupa con `g` y no con `o` para que el laminador tome el archivo como un
+solo modelo con grupos de material, en vez de piezas sueltas en la placa.
 
 ### Contrato de malla exportada
 

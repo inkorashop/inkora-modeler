@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.10">
+<meta name="inkora-version" content="1.0.11">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -548,15 +548,25 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 .recent-meta{font-size:9px;color:var(--text-faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .recent-remove{width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);cursor:pointer;border-radius:3px;font-size:13px;line-height:1;}
 .recent-remove:hover{background:rgba(255,79,79,.12);color:var(--danger)}
+/* Boton partido: el cuerpo ejecuta, el caret elige el preset. Se juntan
+   visualmente con un borde compartido para que se lean como un control. */
+.split-btn{display:inline-flex;align-items:stretch}
+.split-btn>.btn:first-child{border-top-right-radius:0;border-bottom-right-radius:0}
+.split-btn>.split-caret{
+  border-top-left-radius:0;border-bottom-left-radius:0;border-left:0;
+  padding-left:7px;padding-right:7px;
+}
+.split-btn>.split-caret svg{width:9px;height:9px;display:block;transition:transform .12s}
+.split-btn>.split-caret[aria-expanded="true"] svg{transform:rotate(180deg)}
 #slicer-wrap{position:relative;display:none}
-#slicer-wrap.electron-ready{display:block}
-#slicer-panel{
+#slicer-wrap.electron-ready{display:inline-flex}
+#slicer-panel,#export-format-panel{
   position:fixed;top:0;left:0;width:224px;
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
   box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.03);
   z-index:900;display:none;overflow:hidden;
 }
-#slicer-panel.open{display:block}
+#slicer-panel.open,#export-format-panel.open{display:block}
 .slicer-header{padding:9px 12px;border-bottom:1px solid var(--border2);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-faint);}
 .slicer-option{
   width:100%;display:flex;align-items:center;gap:9px;padding:9px 12px;
@@ -567,6 +577,19 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 .slicer-option:last-child{border-bottom:0}
 .slicer-option:hover{background:var(--surface2);color:var(--text)}
 .slicer-option:focus-visible{outline:none;background:rgba(var(--accent-rgb),.08);color:var(--accent)}
+.slicer-option[aria-checked="true"]{color:var(--accent)}
+.slicer-option .slicer-check{margin-left:auto;opacity:0;flex-shrink:0}
+.slicer-option[aria-checked="true"] .slicer-check{opacity:1}
+.format-logo{
+  width:18px;height:18px;border-radius:4px;display:inline-flex;
+  align-items:center;justify-content:center;flex-shrink:0;
+  border:1px solid var(--border);background:var(--surface3);
+  font-size:7px;letter-spacing:.02em;color:var(--text-faint);
+}
+.slicer-option[aria-checked="true"] .format-logo{
+  color:var(--accent);border-color:rgba(var(--accent-rgb),.35);
+  background:rgba(var(--accent-rgb),.10);
+}
 .slicer-logo{
   width:18px;height:18px;border-radius:4px;display:inline-flex;
   align-items:center;justify-content:center;flex-shrink:0;
@@ -659,7 +682,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.10</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.11</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -689,10 +712,30 @@ html.light{
       Extruir
     </button>
     <div class="export-actions">
-      <button class="btn" id="btn-export" disabled title="Exportar el modelo como 3MF">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Exportar 3MF
-      </button>
+      <div class="split-btn" id="export-wrap">
+        <button class="btn" id="btn-export" disabled title="Exportar el modelo (Ctrl+E)">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 7.5V2M3.5 4.5L6 2l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span id="export-label">Exportar 3MF</span>
+        </button>
+        <button class="btn split-caret" id="btn-export-format" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="export-format-panel"
+                aria-label="Elegir formato de exportacion" title="Elegir formato de exportacion">
+          <svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5 5 6.5l3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div id="export-format-panel" role="menu">
+        <div class="slicer-header">Formato de exportacion</div>
+        <button class="slicer-option" data-format="3mf" type="button" role="menuitemradio" aria-checked="true">
+          <span class="format-logo" aria-hidden="true">3MF</span>
+          3MF
+          <svg class="slicer-check" width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M2 5.6 4.3 8 9 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button class="slicer-option" data-format="obj" type="button" role="menuitemradio" aria-checked="false">
+          <span class="format-logo" aria-hidden="true">OBJ</span>
+          OBJ + MTL
+          <svg class="slicer-check" width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M2 5.6 4.3 8 9 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
       <div class="export-gap-control" id="export-gap-control" data-enabled="false">
         <button class="btn export-gap-toggle" id="btn-export-gap" type="button" role="switch"
                 aria-checked="false" aria-controls="export-gap-value"
@@ -711,23 +754,32 @@ html.light{
       </div>
     </div>
     <div id="slicer-wrap">
-      <button class="btn" id="btn-slicer" disabled title="Abrir este 3MF en un laminador instalado">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 8.8V3.2l4-1.7 4 1.7v5.6l-4 1.7-4-1.7zM2 3.2l4 1.7 4-1.7M6 4.9v5.6" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
-        Abrir en laminador
-      </button>
-      <div id="slicer-panel">
+      <div class="split-btn">
+        <button class="btn" id="btn-slicer" disabled title="Abrir en el laminador elegido (Ctrl+Shift+O)">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 8.8V3.2l4-1.7 4 1.7v5.6l-4 1.7-4-1.7zM2 3.2l4 1.7 4-1.7M6 4.9v5.6" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+          <span id="slicer-label">Abrir en laminador</span>
+        </button>
+        <button class="btn split-caret" id="btn-slicer-pick" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="slicer-panel"
+                aria-label="Elegir laminador" title="Elegir laminador">
+          <svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5 5 6.5l3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+      <div id="slicer-panel" role="menu">
         <div class="slicer-header">Elegir laminador</div>
-        <button class="slicer-option" data-slicer="bambu" type="button">
+        <button class="slicer-option" data-slicer="bambu" type="button" role="menuitemradio" aria-checked="true">
           <span class="slicer-logo bambu" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none"><path d="M8 1.8 14.2 5v6L8 14.2 1.8 11V5L8 1.8zM4.2 6.1 8 8l3.8-1.9M8 8v4" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
           </span>
           Bambu Studio
+          <svg class="slicer-check" width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M2 5.6 4.3 8 9 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <button class="slicer-option" data-slicer="orca" type="button">
+        <button class="slicer-option" data-slicer="orca" type="button" role="menuitemradio" aria-checked="false">
           <span class="slicer-logo orca" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none"><path d="M2.2 10.8c2.2-5 6.1-7.2 11.6-7.7-.8 5.3-3.9 8.6-9.3 9.8l1.2-3.3-3.5 1.2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
           </span>
           Orca Slicer
+          <svg class="slicer-check" width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M2 5.6 4.3 8 9 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
     </div>
@@ -850,7 +902,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.10').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.11').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -4601,11 +4653,18 @@ const Exporter = (() => {
     );
   }
 
-  /* ── exportMeshes ─────────────────────────────────────────────────────
-     Fuente unica del 3MF. Exportar y abrir en laminador consumen este mismo
-     blob para que ningun camino quede desactualizado.
+  /* ── buildExportRecords ───────────────────────────────────────────────
+     Etapa geometrica, comun a todos los formatos: solido canonico, contrato
+     manifold, holgura opcional y apoyo en el piso. Devuelve mallas ya
+     validadas en coordenadas de mundo.
+
+     Ningun serializador puede saltearse este paso ni repetirlo: si un
+     formato construyera su propia geometria, quedaria desactualizado en
+     cuanto cambie el pipeline. Un fallo aca es geometrico y afecta a los
+     dos formatos; un fallo despues de aca pertenece a un solo serializador
+     y se corrige sin tocar el otro.
   ─────────────────────────────────────────────────────────────────────── */
-  async function generate3MFBlob(pieces, filename = 'inkora-model', options = {}) {
+  function buildExportRecords(pieces, options = {}) {
     if (!pieces.length) throw new Error('No hay piezas 3D para exportar');
     const clearanceMm = Math.max(0, Number(options.clearanceMm) || 0);
 
@@ -4633,8 +4692,6 @@ const Exporter = (() => {
       allGeoms.map(geometry => geometry.nVerts)
     );
 
-    Utils.toast('Generando 3MF…', '', 60000);
-    const zip = new JSZip();
     const records = pieces.map((piece, index) => ({
       piece,
       geometry: allGeoms[index],
@@ -4642,7 +4699,25 @@ const Exporter = (() => {
       name: piece.name || `Pieza ${index + 1}`,
       hex: hexFromPiece(piece).toLowerCase(),
     }));
-    const colors = [...new Set(records.map(record => record.hex))];
+    // El orden de colores unicos define el indice de filamento en los dos
+    // formatos: pindex en 3MF, orden de materiales en MTL. Debe salir de la
+    // misma lista para que una pieza caiga en el mismo extrusor en ambos.
+    return {
+      records,
+      colors: [...new Set(records.map(record => record.hex))],
+      clearanceMm,
+    };
+  }
+
+  /* ── generate3MFBlob ──────────────────────────────────────────────────
+     Serializador 3MF. Exportar y abrir en laminador consumen este mismo
+     blob para que ningun camino quede desactualizado.
+  ─────────────────────────────────────────────────────────────────────── */
+  async function generate3MFBlob(pieces, filename = 'inkora-model', options = {}) {
+    const { records, colors, clearanceMm } = buildExportRecords(pieces, options);
+
+    Utils.toast('Generando 3MF…', '', 60000);
+    const zip = new JSZip();
     const colorGroupId = records.length + 1;
     const rootObjectId = records.length + 2;
     const safeFilename = escapeXML(filename || 'inkora-model');
@@ -4757,6 +4832,106 @@ const Exporter = (() => {
     };
   }
 
+  /* ── generateOBJFiles ─────────────────────────────────────────────────
+     Serializador Wavefront OBJ. Consume las mismas mallas validadas que el
+     3MF, asi que las dos exportaciones describen exactamente el mismo
+     solido, con el mismo origen y la misma orientacion.
+
+     El OBJ no transporta color: va en un `.mtl` hermano, referenciado por
+     `mtllib` con nombre relativo. Los dos archivos tienen que quedar en la
+     misma carpeta o el modelo entra sin colores.
+
+     Un material por color unico, en el mismo orden que el colorgroup del
+     3MF: asi el laminador mapea cada pieza al mismo filamento en los dos
+     formatos.
+
+     Los indices de OBJ son globales al archivo y empiezan en 1, no por
+     objeto como en 3MF. Por eso cada pieza acumula el offset de todas las
+     anteriores; es el error clasico del formato y lo cubre la regresion.
+  ─────────────────────────────────────────────────────────────────────── */
+  function objName(value, fallback) {
+    const clean = String(value ?? '').trim().replace(/[\r\n]+/g, ' ');
+    return clean || fallback;
+  }
+
+  function materialNameFor(hex, index) {
+    return `INKORA_${String(index + 1).padStart(2, '0')}_${hex.toUpperCase()}`;
+  }
+
+  function generateOBJFiles(pieces, filename = 'inkora-model', options = {}) {
+    const { records, colors, clearanceMm } = buildExportRecords(pieces, options);
+
+    Utils.toast('Generando OBJ…', '', 60000);
+    const baseName = objName(filename, 'inkora-model').replace(/\.(obj|mtl)$/i, '');
+    const mtlName = `${baseName}.mtl`;
+
+    const objLines = [
+      '# INKORA 3D Modeler',
+      `# ${records.length} pieza(s), ${colors.length} color(es)`,
+      `mtllib ${mtlName}`,
+      '',
+    ];
+
+    // `g` y no `o`: el laminador toma el archivo como un solo modelo con
+    // varios grupos de material y los mapea a filamentos. Con `o` cada
+    // pieza entra como objeto suelto en la placa. Es la misma estructura
+    // que traen los OBJ que Orca ya interpreta bien.
+    const fixed = value => (Object.is(value, -0) ? 0 : value).toFixed(6);
+
+    let vertexOffset = 0;
+    records.forEach((record, index) => {
+      const { verts, indices, nVerts, nTris } = record.geometry;
+      objLines.push(`g ${objName(record.name, `Pieza ${index + 1}`)}`);
+      for (let i = 0; i < nVerts; i++) {
+        objLines.push(
+          `v ${fixed(verts[i * 3])} ` +
+          `${fixed(verts[i * 3 + 1])} ` +
+          `${fixed(verts[i * 3 + 2])}`
+        );
+      }
+      objLines.push(
+        `usemtl ${materialNameFor(record.hex, colors.indexOf(record.hex))}`
+      );
+      for (let t = 0; t < nTris; t++) {
+        objLines.push(
+          `f ${indices[t * 3] + vertexOffset + 1} ` +
+          `${indices[t * 3 + 1] + vertexOffset + 1} ` +
+          `${indices[t * 3 + 2] + vertexOffset + 1}`
+        );
+      }
+      objLines.push('');
+      vertexOffset += nVerts;
+    });
+
+    const mtlLines = ['# INKORA 3D Modeler', ''];
+    colors.forEach((hex, index) => {
+      const r = parseInt(hex.slice(0, 2), 16) / 255;
+      const g = parseInt(hex.slice(2, 4), 16) / 255;
+      const b = parseInt(hex.slice(4, 6), 16) / 255;
+      mtlLines.push(
+        `newmtl ${materialNameFor(hex, index)}`,
+        'Ka 0.000000 0.000000 0.000000',
+        `Kd ${r.toFixed(6)} ${g.toFixed(6)} ${b.toFixed(6)}`,
+        'Ks 0.000000 0.000000 0.000000',
+        'd 1.000000',
+        'illum 1',
+        ''
+      );
+    });
+
+    return {
+      objText: objLines.join('\n'),
+      mtlText: mtlLines.join('\n'),
+      objFilename: `${baseName}.obj`,
+      mtlFilename: mtlName,
+      failedCount: 0,
+      totalCount: pieces.length,
+      vertexCount: vertexOffset,
+      colorCount: colors.length,
+      clearanceMm,
+    };
+  }
+
   function download3MFBlob(blob, filename = 'inkora-model') {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -4764,14 +4939,32 @@ const Exporter = (() => {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
+  /* Dos descargas seguidas dentro del mismo gesto del usuario. Separarlas
+     con un timer haria que la segunda pierda el gesto y Chrome la trate
+     como descarga automatica. En Electron no hay limite; en navegador,
+     Chrome puede pedir permiso una vez por sitio para varias descargas. */
+  function downloadTextFile(text, filename, mime) {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
   async function exportMeshes(pieces, filename = 'inkora-model', options = {}) {
+    if ((options.format || '3mf') === 'obj') {
+      const result = generateOBJFiles(pieces, filename, options);
+      downloadTextFile(result.objText, result.objFilename, 'model/obj');
+      downloadTextFile(result.mtlText, result.mtlFilename, 'model/mtl');
+      return { failedCount: result.failedCount, totalCount: result.totalCount };
+    }
     const result = await generate3MFBlob(pieces, filename, options);
     download3MFBlob(result.blob, filename);
 
     return { failedCount: result.failedCount, totalCount: result.totalCount };
   }
 
-  return { exportMeshes, generate3MFBlob };
+  return { exportMeshes, generate3MFBlob, generateOBJFiles };
 })();
 
 
@@ -6920,7 +7113,8 @@ const PanelUI = (() => {
       { id:'import',      group:'Archivo',    desc:'Importar DXF',               key:'i',         ctrl:true,  shift:false, alt:false },
       { id:'openProject', group:'Archivo',    desc:'Abrir proyecto',             key:'o',         ctrl:true,  shift:false, alt:false },
       { id:'saveProject', group:'Archivo',    desc:'Guardar proyecto',           key:'s',         ctrl:true,  shift:false, alt:false },
-      { id:'export',      group:'Archivo',    desc:'Exportar 3MF',               key:'e',         ctrl:true,  shift:false, alt:false },
+      { id:'export',      group:'Archivo',    desc:'Exportar (formato elegido)', key:'e',         ctrl:true,  shift:false, alt:false },
+      { id:'openSlicer',  group:'Archivo',    desc:'Abrir en laminador elegido', key:'o',         ctrl:true,  shift:true,  alt:false },
     ];
 
     /* ── Estado ─────────────────────────────────────── */
@@ -7403,6 +7597,14 @@ const PanelUI = (() => {
         case 'export':
           if (State.pieces.length) document.getElementById('btn-export').click();
           break;
+
+        case 'openSlicer': {
+          // El boton solo existe en Electron: fuera de ahi el atajo no hace
+          // nada, igual que el control.
+          const slicerBtn = document.getElementById('btn-slicer');
+          if (State.pieces.length && slicerBtn && !slicerBtn.disabled) slicerBtn.click();
+          break;
+        }
       }
     }
 
@@ -7990,6 +8192,9 @@ const PanelUI = (() => {
     });
 
     if(!selected.length && !selected3D.length) return;
+    // Marca desde donde contar las piezas creadas por esta extrusion, para
+    // dejarlas seleccionadas al terminar.
+    const piecesBefore = State.pieces.length;
     const extDepth=Utils.parseDecimal(document.getElementById('ex-depth').value, 3);
     if (!Number.isFinite(extDepth) || Math.abs(extDepth) < 0.0001) {
       Utils.toast('La profundidad no puede ser 0.', 'err');
@@ -8387,9 +8592,23 @@ const PanelUI = (() => {
     const selected3DSourceIdxs = new Set(
       selected3D.map(({ c, idx }) => resolveSourceContour(c, idx).sourceIdx)
     );
+    /* Mismo criterio que en la extrusion 2D: si los huecos cubren todo el
+       material propio de la cara, no queda solido que apilar encima y la
+       union 2D quedaria vacia. Se nota al re-extruir con todo seleccionado
+       — que es justo el estado en el que queda el modelo despues de
+       extruir — asi que una cara sin material se descarta y se informa, en
+       vez de abortar la operacion completa. */
     const selected3DItems = selected3D.map(({ c, idx }) =>
       build3DExtrusionItem(c, idx, selected3DSourceIdxs)
-    );
+    ).filter(item => {
+      if (item.extraShapes.length) return true;
+      const outerArea = ringArea(item.compositeShape);
+      const holesArea = item.compositeShape.holes
+        .reduce((sum, hole) => sum + ringArea(hole), 0);
+      if (outerArea - holesArea > outerArea * 1e-6) return true;
+      coveredByChildren++;
+      return false;
+    });
 
     // Extruir sobre piezas 3D seleccionadas
     if (State.extrudeMode === 'merged' && selected3DItems.length > 1) {
@@ -8491,7 +8710,24 @@ const PanelUI = (() => {
       });
     }
 
+    /* La extrusion recien hecha queda seleccionada: es lo que el usuario
+       tiene en la cabeza para el paso siguiente (cambiarle el color, volver
+       a extruir sobre una cara, moverla). En modo unido eso es una sola
+       pieza; en separado, todas las que acaba de crear.
+
+       Se resuelve por identidad de pieza y no por rango de indices: una
+       pieza 3D nueva agrega su propio contorno ficticio al final, y las 2D
+       reusan el contorno de origen. La seleccion se aplica antes del
+       snapshot para que Ctrl+Z / Ctrl+Y la restauren igual (ver
+       GEOMETRY_PIPELINE, seccion 9). */
     PanelUI.clearAllSelection();
+    State.pieces.slice(piecesBefore).forEach(piece => {
+      const idx = State.contours.findIndex(contour => contour.piece === piece);
+      if (idx === -1) return;
+      State.selectedIdxs.add(idx);
+      State.selectedFaces.set(idx, 'top');
+    });
+    PanelUI._syncPieceSelection();
     PanelUI.refreshContourVisuals();PanelUI.renderList();PanelUI.updateModeBadge();PanelUI.updateButtons();
     PanelUI.updateColorPanel();
     History.push(State);
@@ -8599,94 +8835,233 @@ const PanelUI = (() => {
   exportGapInput.value = formatExportClearance(DEFAULT_EXPORT_CLEARANCE_MM);
   refreshExportClearanceUI();
 
+  /* ── ExportPrefs ───────────────────────────────────────────────────────
+     Formato de exportacion y laminador elegidos. Son preferencias del
+     usuario, no estado del documento: no entran en el snapshot de historial
+     ni en el proyecto guardado, y sobreviven a cerrar el programa via
+     localStorage — igual que el tema y los atajos.
+
+     Un valor guardado que ya no exista (formato retirado, laminador
+     renombrado) cae al default en vez de dejar la app en un estado
+     imposible de corregir desde la interfaz.
+  ─────────────────────────────────────────────────────────────────────── */
+  const ExportPrefs = (() => {
+    const FORMAT_KEY = 'inkora3d-export-format';
+    const SLICER_KEY = 'inkora3d-slicer';
+    const FORMATS = {
+      '3mf': { label: '3MF', button: 'Exportar 3MF' },
+      obj:   { label: 'OBJ', button: 'Exportar OBJ' },
+    };
+    const SLICERS = {
+      bambu: { label: 'Bambu Studio', button: 'Abrir en Bambu' },
+      orca:  { label: 'Orca Slicer',  button: 'Abrir en Orca' },
+    };
+
+    function read(key, table, fallback) {
+      try {
+        const saved = localStorage.getItem(key);
+        return saved && table[saved] ? saved : fallback;
+      } catch { return fallback; }
+    }
+    function write(key, value) {
+      try { localStorage.setItem(key, value); } catch (e) {}
+    }
+
+    let format = read(FORMAT_KEY, FORMATS, '3mf');
+    let slicer = read(SLICER_KEY, SLICERS, 'bambu');
+    const listeners = [];
+
+    function notify() { listeners.forEach(fn => fn()); }
+
+    return {
+      FORMATS, SLICERS,
+      getFormat: () => format,
+      getSlicer: () => slicer,
+      formatLabel: () => FORMATS[format].label,
+      slicerLabel: () => SLICERS[slicer].label,
+      setFormat(value) {
+        if (!FORMATS[value] || value === format) return;
+        format = value; write(FORMAT_KEY, value); notify();
+      },
+      setSlicer(value) {
+        if (!SLICERS[value] || value === slicer) return;
+        slicer = value; write(SLICER_KEY, value); notify();
+      },
+      onChange(fn) { listeners.push(fn); fn(); },
+    };
+  })();
+
+  /* Desplegable anclado a un boton partido: el caret solo abre y elige, el
+     cuerpo del boton ejecuta. Se posiciona en coordenadas de viewport
+     porque la cabecera puede scrollear. */
+  function attachPresetDropdown({ caret, panel, options, isChecked, onPick }) {
+    if (!caret || !panel) return null;
+
+    function position() {
+      const rect = caret.getBoundingClientRect();
+      const gap = 7;
+      const pad = 8;
+      const width = panel.offsetWidth || 224;
+      const height = panel.offsetHeight || 120;
+      panel.style.left = `${Utils.clamp(rect.right - width, pad, Math.max(pad, window.innerWidth - width - pad))}px`;
+      const below = rect.bottom + gap;
+      panel.style.top = `${below + height <= window.innerHeight - pad ? below : Math.max(pad, rect.top - height - gap)}px`;
+    }
+    function close() {
+      panel.classList.remove('open');
+      caret.setAttribute('aria-expanded', 'false');
+    }
+    function open() {
+      panel.classList.add('open');
+      caret.setAttribute('aria-expanded', 'true');
+      position();
+    }
+    function syncChecks() {
+      options.forEach(({ el, value }) =>
+        el.setAttribute('aria-checked', isChecked(value) ? 'true' : 'false')
+      );
+    }
+
+    caret.addEventListener('click', e => {
+      e.stopPropagation();
+      if (caret.disabled) return;
+      if (panel.classList.contains('open')) close(); else open();
+    });
+    options.forEach(({ el, value }) => {
+      el.addEventListener('click', e => {
+        e.stopPropagation();
+        onPick(value);
+        syncChecks();
+        close();
+      });
+    });
+    document.addEventListener('click', e => {
+      if (!panel.contains(e.target) && e.target !== caret && !caret.contains(e.target)) close();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && panel.classList.contains('open')) close();
+    });
+    window.addEventListener('resize', () => { if (panel.classList.contains('open')) position(); });
+    document.getElementById('header')?.addEventListener('scroll', () => {
+      if (panel.classList.contains('open')) position();
+    });
+
+    syncChecks();
+    return { close, syncChecks };
+  }
+
+  (() => {
+    const panel = document.getElementById('export-format-panel');
+    const caret = document.getElementById('btn-export-format');
+    const label = document.getElementById('export-label');
+    const button = document.getElementById('btn-export');
+    const options = [...panel.querySelectorAll('[data-format]')]
+      .map(el => ({ el, value: el.dataset.format }));
+
+    attachPresetDropdown({
+      caret, panel, options,
+      isChecked: value => ExportPrefs.getFormat() === value,
+      onPick: value => ExportPrefs.setFormat(value),
+    });
+
+    ExportPrefs.onChange(() => {
+      const format = ExportPrefs.getFormat();
+      label.textContent = ExportPrefs.FORMATS[format].button;
+      button.title = format === 'obj'
+        ? 'Exportar el modelo como OBJ + MTL (Ctrl+E)'
+        : 'Exportar el modelo como 3MF (Ctrl+E)';
+    });
+  })();
+
   document.getElementById('btn-export').addEventListener('click',async()=>{
     if(!State.pieces.length)return;
-    Utils.toast('Generando 3MF…','',60000);
+    const format = ExportPrefs.getFormat();
+    const formatLabel = ExportPrefs.formatLabel();
+    Utils.toast(`Generando ${formatLabel}…`,'',60000);
     try {
       const result = await Exporter.exportMeshes(
         State.pieces,
         State.filename||'inkora-model',
-        currentExportOptions()
+        { ...currentExportOptions(), format }
       );
       if (result && result.failedCount > 0 && result.failedCount < result.totalCount) {
         Utils.toast(`Exportado con advertencias: ${result.failedCount} de ${result.totalCount} pieza(s) no se pudieron incluir en el archivo.`, 'err');
+      } else if (format === 'obj') {
+        // Son dos archivos y el .mtl no sirve suelto: decirlo explicito
+        // evita que el usuario mueva solo el .obj y pierda los colores.
+        Utils.toast('OBJ y MTL exportados. Manteneelos en la misma carpeta para conservar los colores.','ok');
       } else {
         Utils.toast('Archivo exportado correctamente.','ok');
       }
     } catch(err){Utils.toast('Error al exportar: '+err.message,'err');console.error(err);}
   });
 
-  // Abrir el 3MF actual en un laminador instalado (solo Electron).
+  /* Abrir el modelo actual en un laminador instalado (solo Electron).
+     El laminador y el formato son dos presets independientes que se
+     combinan: OBJ + Orca abre el OBJ en Orca. La flecha solo elige; el
+     cuerpo del boton ejecuta, igual que en Exportar. */
   (() => {
     const wrap = document.getElementById('slicer-wrap');
     const btn = document.getElementById('btn-slicer');
+    const caret = document.getElementById('btn-slicer-pick');
+    const label = document.getElementById('slicer-label');
     const panel = document.getElementById('slicer-panel');
-    if (!wrap || !btn || !panel || !window.inkoraSlicer) return;
+    if (!wrap || !btn || !caret || !panel || !window.inkoraSlicer) return;
 
-    const labels = { bambu: 'Bambu Studio', orca: 'Orca Slicer' };
     wrap.classList.add('electron-ready');
 
-    function positionPanel() {
-      const rect = btn.getBoundingClientRect();
-      const gap = 7;
-      const pad = 8;
-      const width = panel.offsetWidth || 224;
-      const height = panel.offsetHeight || 120;
-      const left = Utils.clamp(rect.left, pad, Math.max(pad, window.innerWidth - width - pad));
-      const below = rect.bottom + gap;
-      const top = below + height <= window.innerHeight - pad
-        ? below
-        : Math.max(pad, rect.top - height - gap);
-      panel.style.left = `${left}px`;
-      panel.style.top = `${top}px`;
-    }
-
-    function openPanel() {
-      panel.classList.add('open');
-      positionPanel();
-    }
-
-    function closePanel() {
-      panel.classList.remove('open');
-    }
-
-    btn.addEventListener('click', e => {
-      e.stopPropagation();
-      if (btn.disabled) return;
-      if (panel.classList.contains('open')) closePanel();
-      else openPanel();
+    const options = [...panel.querySelectorAll('[data-slicer]')]
+      .map(el => ({ el, value: el.dataset.slicer }));
+    const dropdown = attachPresetDropdown({
+      caret, panel, options,
+      isChecked: value => ExportPrefs.getSlicer() === value,
+      onPick: value => ExportPrefs.setSlicer(value),
     });
 
-    document.addEventListener('click', e => {
-      if (!wrap.contains(e.target) && !panel.contains(e.target)) closePanel();
-    });
-    window.addEventListener('resize', () => { if (panel.classList.contains('open')) positionPanel(); });
-    document.getElementById('header')?.addEventListener('scroll', () => {
-      if (panel.classList.contains('open')) positionPanel();
+    ExportPrefs.onChange(() => {
+      label.textContent = ExportPrefs.SLICERS[ExportPrefs.getSlicer()].button;
+      btn.title = `Abrir el ${ExportPrefs.formatLabel()} en ` +
+        `${ExportPrefs.slicerLabel()} (Ctrl+Shift+O)`;
     });
 
-    async function openInSlicer(slicer) {
+    async function openInSlicer() {
       if (!State.pieces.length) return;
-      const label = labels[slicer] || 'laminador';
-      closePanel();
-      Utils.toast(`Generando 3MF para ${label}...`, '', 60000);
+      const slicer = ExportPrefs.getSlicer();
+      const slicerLabel = ExportPrefs.slicerLabel();
+      const format = ExportPrefs.getFormat();
+      dropdown?.close();
+      Utils.toast(`Generando ${ExportPrefs.formatLabel()} para ${slicerLabel}...`, '', 60000);
       try {
-        const result = await Exporter.generate3MFBlob(
-          State.pieces,
-          State.filename || 'inkora-model',
-          currentExportOptions()
-        );
-        const data = await result.blob.arrayBuffer();
-        const response = await window.inkoraSlicer.open({
-          slicer,
-          filename: State.filename || 'inkora-model',
-          data,
-        });
-        if (!response?.ok) throw new Error(response?.message || `No se pudo abrir ${label}.`);
-        if (result.failedCount > 0 && result.failedCount < result.totalCount) {
-          Utils.toast(`${label} abierto con advertencias: ${result.failedCount} de ${result.totalCount} pieza(s) no se pudieron incluir.`, 'err');
+        const baseName = State.filename || 'inkora-model';
+        const options = currentExportOptions();
+        let payload;
+        let result;
+        if (format === 'obj') {
+          result = Exporter.generateOBJFiles(State.pieces, baseName, options);
+          // El .mtl viaja junto al .obj y con el nombre exacto que declara
+          // mtllib: si no queda al lado, el laminador abre el modelo gris.
+          payload = {
+            slicer,
+            filename: baseName,
+            files: [
+              { name: result.objFilename, text: result.objText, open: true },
+              { name: result.mtlFilename, text: result.mtlText },
+            ],
+          };
         } else {
-          Utils.toast(`${label} abierto con el 3MF actual.`, 'ok');
+          result = await Exporter.generate3MFBlob(State.pieces, baseName, options);
+          payload = {
+            slicer,
+            filename: baseName,
+            data: await result.blob.arrayBuffer(),
+          };
+        }
+        const response = await window.inkoraSlicer.open(payload);
+        if (!response?.ok) throw new Error(response?.message || `No se pudo abrir ${slicerLabel}.`);
+        if (result.failedCount > 0 && result.failedCount < result.totalCount) {
+          Utils.toast(`${slicerLabel} abierto con advertencias: ${result.failedCount} de ${result.totalCount} pieza(s) no se pudieron incluir.`, 'err');
+        } else {
+          Utils.toast(`${slicerLabel} abierto con el ${ExportPrefs.formatLabel()} actual.`, 'ok');
         }
       } catch (err) {
         Utils.toast('Error al abrir laminador: ' + err.message, 'err');
@@ -8694,11 +9069,10 @@ const PanelUI = (() => {
       }
     }
 
-    panel.querySelectorAll('.slicer-option').forEach(option => {
-      option.addEventListener('click', e => {
-        e.stopPropagation();
-        openInSlicer(option.dataset.slicer);
-      });
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (btn.disabled) return;
+      openInSlicer();
     });
   })();
 

@@ -215,17 +215,63 @@ function bufferFromPayload(data) {
   throw new Error('No se recibieron datos 3MF validos.');
 }
 
+const MAX_MODEL_BYTES = 250 * 1024 * 1024;
+
+async function makeTempDir() {
+  const tempDir = path.join(app.getPath('temp'), 'inkora-3d-modeler');
+  await fs.promises.mkdir(tempDir, { recursive: true });
+  return tempDir;
+}
+
+function stampNow() {
+  return new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 17);
+}
+
 async function writeTemp3MF(payload) {
   const buffer = bufferFromPayload(payload?.data);
   if (!buffer.length) throw new Error('El 3MF generado esta vacio.');
-  if (buffer.length > 250 * 1024 * 1024) throw new Error('El 3MF generado es demasiado grande para abrirlo automaticamente.');
+  if (buffer.length > MAX_MODEL_BYTES) throw new Error('El 3MF generado es demasiado grande para abrirlo automaticamente.');
 
-  const tempDir = path.join(app.getPath('temp'), 'inkora-3d-modeler');
-  await fs.promises.mkdir(tempDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 17);
-  const filePath = path.join(tempDir, `${sanitize3MFName(payload?.filename)}-${stamp}.3mf`);
+  const tempDir = await makeTempDir();
+  const filePath = path.join(tempDir, `${sanitize3MFName(payload?.filename)}-${stampNow()}.3mf`);
   await fs.promises.writeFile(filePath, buffer);
   return filePath;
+}
+
+/* Un modelo puede necesitar mas de un archivo: el OBJ declara su paleta en
+   un .mtl hermano y el laminador lo busca por el nombre exacto que aparece
+   en `mtllib`, en la misma carpeta. Por eso el conjunto se escribe entero en
+   un subdirectorio propio con los nombres tal cual los genero el HTML, y
+   recien despues se abre el que corresponde. Un timestamp en la carpeta —y
+   no en cada archivo— evita colisiones sin romper esa referencia. */
+async function writeTempFileSet(payload) {
+  const files = Array.isArray(payload?.files) ? payload.files : [];
+  if (!files.length) throw new Error('No se recibieron archivos para abrir.');
+
+  const baseDir = await makeTempDir();
+  const setDir = path.join(baseDir, `${sanitize3MFName(payload?.filename)}-${stampNow()}`);
+  await fs.promises.mkdir(setDir, { recursive: true });
+
+  let primary = null;
+  let totalBytes = 0;
+  for (const file of files) {
+    const name = path.basename(String(file?.name || ''));
+    if (!name || name !== String(file?.name || '')) {
+      throw new Error('Nombre de archivo invalido para el laminador.');
+    }
+    const buffer = typeof file.text === 'string'
+      ? Buffer.from(file.text, 'utf8')
+      : bufferFromPayload(file.data);
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_MODEL_BYTES) {
+      throw new Error('El modelo generado es demasiado grande para abrirlo automaticamente.');
+    }
+    const filePath = path.join(setDir, name);
+    await fs.promises.writeFile(filePath, buffer);
+    if (file.open || !primary) primary = filePath;
+  }
+  if (!primary) throw new Error('Ningun archivo quedo marcado para abrir.');
+  return primary;
 }
 
 // Auto-actualizacion (electron-updater + GitHub Releases).
@@ -257,7 +303,9 @@ ipcMain.handle('slicer-open-3mf', async (_event, payload) => {
     if (!payload || !SLICERS[payload.slicer]) {
       throw new Error('Laminador no reconocido.');
     }
-    const filePath = await writeTemp3MF(payload);
+    const filePath = Array.isArray(payload.files) && payload.files.length
+      ? await writeTempFileSet(payload)
+      : await writeTemp3MF(payload);
     await openFileInSlicer(payload.slicer, filePath);
     return { ok: true, filePath };
   } catch (err) {

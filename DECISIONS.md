@@ -3,6 +3,105 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento) - Exportacion OBJ, presets de exportacion y seleccion tras extruir
+
+### Por que OBJ
+
+OrcaSlicer no toma los colores del 3MF que genera INKORA, pero si los toma
+del mismo modelo en OBJ (verificado a mano por el usuario). El OBJ deja de
+ser un formato "extra" y pasa a ser la via para llevar el modelo multicolor
+a Orca.
+
+### Corte entre geometria y serializacion
+
+`generate3MFBlob()` mezclaba dos etapas. Se separo en:
+
+```text
+buildExportRecords()   <- solido canonico, contrato manifold, holgura, piso
+generate3MFBlob() / generateOBJFiles()   <- un serializador por formato
+```
+
+Un serializador nunca construye su propia geometria. Un fallo antes del
+corte afecta a los dos formatos; uno despues pertenece a un solo formato y
+se corrige sin tocar el otro. El orden de colores unicos sale de la etapa
+comun, asi que una pieza cae en el mismo filamento en 3MF y en OBJ.
+
+### Decisiones del formato OBJ
+
+- **Dos archivos, sin zip.** Por pedido explicito: `.obj` y `.mtl` se
+  descargan seguidos dentro del mismo gesto del usuario. Separarlos con un
+  timer haria que la segunda descarga pierda el gesto y Chrome la trate como
+  descarga automatica. En Electron no hay limite; en navegador Chrome puede
+  pedir permiso una vez por sitio.
+- **Indices globales y 1-based.** No por objeto como en 3MF: cada pieza
+  acumula el offset de las anteriores. Es el error clasico del formato y
+  tiene su propia verificacion en la regresion.
+- **`g` y no `o`.** Con `g` el laminador toma el archivo como un modelo con
+  grupos de material; con `o` cada pieza entra como objeto suelto en la
+  placa. Es la estructura que traen los OBJ que Orca ya interpreta bien.
+- **Un material por color unico**, en el mismo orden que el colorgroup del
+  3MF.
+
+### Presets de exportacion
+
+Los botones Exportar y Abrir en laminador pasan a ser botones partidos: el
+cuerpo ejecuta, la flecha elige. Antes, el boton de laminador abria el panel
+y elegir un laminador abria la aplicacion en el acto; ahora elegir solo
+guarda el preset.
+
+Formato y laminador son preferencias del usuario, no estado del documento:
+viven en `localStorage` (`inkora3d-export-format`, `inkora3d-slicer`), no
+entran en el snapshot de historial ni en el proyecto guardado, y sobreviven
+a cerrar el programa. Defaults `3mf` y `bambu`. Un valor guardado que ya no
+exista cae al default en vez de dejar la interfaz en un estado que no se
+puede corregir desde la interfaz.
+
+Los dos presets se combinan: OBJ + Orca abre el OBJ en Orca. `Ctrl+E`
+exporta en el formato elegido; `Ctrl+Shift+O` abre en el laminador elegido.
+
+`main.js` escribia el temporal con extension `.3mf` fija. Ahora acepta un
+conjunto de archivos que se escriben juntos en un subdirectorio propio con
+los nombres tal cual los genero el HTML, y abre el marcado con `open: true`.
+El `.mtl` tiene que quedar al lado del `.obj` con el nombre exacto que
+declara `mtllib` o el laminador abre el modelo gris. Esto vive en el paquete
+Electron: **no alcanza con actualizar el HTML, hay que regenerar el .exe**.
+
+### Seleccion despues de extruir
+
+Extruir dejaba la seleccion vacia. Ahora deja seleccionada la extrusion
+recien creada: una pieza en modo unido, todas las nuevas en modo separado.
+Se resuelve por identidad de pieza y no por rango de indices, porque una
+pieza 3D agrega su propio contorno ficticio al final mientras que una 2D
+reusa el de origen. Se aplica antes del snapshot para que UNDO/REDO la
+restauren igual.
+
+Eso convierte "extruir dos veces seguidas" en un flujo normal y destapo que
+la re-extrusion 3D no tenia el guard de material que si tiene la 2D: con
+todo seleccionado, una cara cuyos huecos la cubren entera dejaba la union 2D
+vacia. En `HEAD` eso no daba error, colgaba la aplicacion (se aborto la
+medicion a los 20 minutos). Ahora esa cara se descarta y se informa.
+
+### Queda abierto
+
+Re-extruir una pieza **unida** todavia falla con `La union 2D produjo una
+pieza vacia`. La re-extrusion reconstruye el shape desde el contorno
+primario del merge y le resta los `_holeIdxs` de toda la pieza, que no le
+pertenecen. Lo correcto es re-extruir desde el solido canonico que la pieza
+ya guarda en `mesh.userData._solidShapes`. Es un defecto anterior a este
+cambio; antes colgaba, ahora falla rapido y con mensaje. En modo separado la
+re-extrusion si funciona.
+
+### Regresion
+
+`objTucan` y `objLayered` validan lo exclusivo del formato: indices en rango
+y 1-based, cantidad de vertices declarada, un grupo por pieza, cierre de
+malla por grupo, `mtllib` coincidente con el nombre real del `.mtl`,
+materiales usados declarados y sin sobrantes, y paridad de colores con el
+3MF. El cierre se mide por grupo: piezas adyacentes comparten frontera
+exacta por invariante del pipeline, asi que soldar todo el archivo junto
+reportaria aristas de cuatro caras que no son un defecto. Version
+HTML/Electron: `1.0.11`.
+
 ## 2026-08-03 - Diseno por capas denso: colores ACI, vacios falsos, union unida y marquee
 
 Reportado sobre `Modelos/Cataratas.dxf` / `.svg` (5 colores, ~130 regiones,

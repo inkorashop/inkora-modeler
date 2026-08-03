@@ -1012,6 +1012,90 @@ async function collectMetrics(win) {
       return { contours, voids, selectable, colors, modes };
     }
 
+    /* Serializador OBJ. Comparte con el 3MF la etapa geometrica, asi que
+       aca no se re-valida la malla: se valida lo que es exclusivo del
+       formato y no lo cubre ningun otro test.
+
+       Los indices de OBJ son globales al archivo y 1-based, no por objeto
+       como en 3MF. Un offset mal acumulado produce un archivo que abre sin
+       error pero con la geometria mezclada, asi que se revisa rango,
+       cierre por grupo y correspondencia con el .mtl. */
+    async function testOBJExport(text, name, extension) {
+      await importThroughFileInput(text, name + extension);
+      PanelUI.selectAll();
+      State.extrudeMode = 'separate';
+      document.getElementById('ex-depth').value = '3';
+      document.getElementById('ex-bevel').value = '0';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const obj = Exporter.generateOBJFiles(State.pieces, name, { clearanceMm: 0 });
+      const threeMF = await Exporter.generate3MFBlob(State.pieces, name, { clearanceMm: 0 });
+
+      const vertices = [];
+      const faces = [];
+      const groups = [];
+      const usedMaterials = new Set();
+      let mtllib = null;
+      obj.objText.split('\\n').forEach(line => {
+        if (line.startsWith('v ')) vertices.push(line.slice(2).split(' ').map(Number));
+        else if (line.startsWith('f ')) faces.push(line.slice(2).split(' ').map(Number));
+        else if (line.startsWith('g ')) groups.push({ start: faces.length });
+        else if (line.startsWith('usemtl ')) usedMaterials.add(line.slice(7).trim());
+        else if (line.startsWith('mtllib ')) mtllib = line.slice(7).trim();
+      });
+      const declared = [...obj.mtlText.matchAll(/^newmtl (.+)$/gm)].map(match => match[1].trim());
+
+      let outOfRange = 0;
+      let degenerate = 0;
+      faces.forEach(face => {
+        if (face.length !== 3) outOfRange++;
+        face.forEach(index => {
+          if (!Number.isInteger(index) || index < 1 || index > vertices.length) outOfRange++;
+        });
+        if (face[0] === face[1] || face[1] === face[2] || face[0] === face[2]) degenerate++;
+      });
+
+      // El cierre se mide por grupo: piezas adyacentes comparten frontera
+      // exacta por invariante del pipeline, asi que soldar todo el archivo
+      // junto reportaria aristas de cuatro caras que no son un defecto.
+      const vertexKey = index => vertices[index - 1]
+        .map(value => Math.round(value * 1e5)).join(',');
+      let openEdges = 0;
+      let overusedEdges = 0;
+      groups.forEach((group, index) => {
+        const end = index + 1 < groups.length ? groups[index + 1].start : faces.length;
+        const uses = new Map();
+        for (let face = group.start; face < end; face++) {
+          const [a, b, c] = faces[face].map(vertexKey);
+          [[a, b], [b, c], [c, a]].forEach(([from, to]) => {
+            const key = from < to ? from + '|' + to : to + '|' + from;
+            uses.set(key, (uses.get(key) || 0) + 1);
+          });
+        }
+        uses.forEach(count => {
+          if (count === 1) openEdges++;
+          else if (count > 2) overusedEdges++;
+        });
+      });
+
+      return {
+        pieces: State.pieces.length,
+        groups: groups.length,
+        vertices: vertices.length,
+        declaredVertices: obj.vertexCount,
+        faces: faces.length,
+        mtllibMatchesFilename: mtllib === obj.mtlFilename,
+        missingMaterials: [...usedMaterials].filter(m => !declared.includes(m)).length,
+        unusedMaterials: declared.filter(m => !usedMaterials.has(m)).length,
+        outOfRange,
+        degenerate,
+        openEdges,
+        overusedEdges,
+        colorParityWith3MF: obj.colorCount === threeMF.colorCount,
+      };
+    }
+
     async function testFullFlow(parser, text, name) {
       const shapeData = await parser.loadText(text);
       const coincidentBoundaryPairs = countCoincidentBounds(shapeData);
@@ -1257,6 +1341,8 @@ async function collectMetrics(win) {
       materialVoids: await testMaterialVoidDetection(),
       dxf: summarize(await DXFParser.loadText(dxfText)),
       svg: summarize(await SVGParser.loadText(svgText)),
+      objTucan: await testOBJExport(dxfText, 'tucan-obj', '.dxf'),
+      objLayered: await testOBJExport(layeredSvgText, 'cataratas-obj', '.svg'),
       layeredDxf: await testLayeredArtwork(layeredDxfText, 'cataratas-dxf', '.dxf'),
       layeredSvg: await testLayeredArtwork(layeredSvgText, 'cataratas-svg', '.svg'),
       dxfFlow: await testFullFlow(DXFParser, dxfText, 'tucan-dxf-test'),
@@ -1471,6 +1557,34 @@ function validate(metrics) {
   }
   if (metrics.dxf.colorCount < 3) failures.push(`DXF conserva solo ${metrics.dxf.colorCount} colores`);
   if (metrics.svg.colorCount < 4) failures.push(`SVG conserva solo ${metrics.svg.colorCount} colores`);
+  for (const key of ['objTucan', 'objLayered']) {
+    const obj = metrics[key];
+    if (obj.outOfRange) {
+      failures.push(`${key}: ${obj.outOfRange} indice(s) de OBJ fuera de rango o no 1-based`);
+    }
+    if (obj.vertices !== obj.declaredVertices) {
+      failures.push(`${key}: el OBJ escribe ${obj.vertices} vertices y declara ${obj.declaredVertices}`);
+    }
+    if (obj.groups !== obj.pieces) {
+      failures.push(`${key}: ${obj.groups} grupos para ${obj.pieces} piezas`);
+    }
+    if (obj.openEdges || obj.overusedEdges || obj.degenerate) {
+      failures.push(
+        `${key}: OBJ con ${obj.openEdges} aristas abiertas, ${obj.overusedEdges} sobreusadas y ${obj.degenerate} triangulos degenerados`
+      );
+    }
+    if (!obj.mtllibMatchesFilename) {
+      failures.push(`${key}: mtllib no coincide con el nombre real del .mtl`);
+    }
+    if (obj.missingMaterials || obj.unusedMaterials) {
+      failures.push(
+        `${key}: ${obj.missingMaterials} material(es) usados sin declarar y ${obj.unusedMaterials} declarados sin usar`
+      );
+    }
+    if (!obj.colorParityWith3MF) {
+      failures.push(`${key}: OBJ y 3MF no coinciden en cantidad de colores`);
+    }
+  }
   for (const format of ['Dxf', 'Svg']) {
     const layered = metrics[`layered${format}`];
     const label = format.toUpperCase();

@@ -18,10 +18,13 @@ contextBridge.exposeInMainWorld('inkoraAppInfo', {
   version,
 });
 
+// `data` abre un unico 3MF; `files` abre un conjunto que debe quedar junto
+// en la misma carpeta (OBJ + su MTL), marcando cual se abre con `open: true`.
 contextBridge.exposeInMainWorld('inkoraSlicer', {
-  open: ({ slicer, filename, data }) => ipcRenderer.invoke('slicer-open-3mf', {
+  open: ({ slicer, filename, data, files }) => ipcRenderer.invoke('slicer-open-3mf', {
     slicer,
     filename,
     data,
+    files,
   }),
 });
