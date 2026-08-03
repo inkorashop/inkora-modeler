@@ -3,6 +3,66 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento 4) - Colores oscuros alcanzables y contornos que no traspasan
+
+### No se podian elegir colores oscuros
+
+Con luz de estudio, iluminacion por entorno y tone mapping ACES, la curva de
+respuesta estaba aplastada contra el techo: `#101010` salia en pantalla como
+`#7d8189` y `#220900` como un naranja claro. Bajar el cursor del selector no
+servia: no habia forma de obtener una pieza oscura.
+
+Se evaluo bajar las luces. Medido sobre una paleta de 11 colores, la mejor
+combinacion de intensidad/entorno dejaba un error medio de 70 y hundia los
+claros (`#ffffff` -> `#b8b9bd`): apaga toda la escena y no resuelve.
+
+La solucion invierte la cadena en vez de debilitarla. `Viewport.
+materialColorFor()` busca por biseccion el color de material cuyo render
+coincide con el color elegido; la respuesta es monotona por canal, asi que
+converge en pocos pasos. La escena conserva su iluminacion.
+
+| elegido | antes | ahora |
+| --- | ---: | ---: |
+| `#331207` | 214 | 55 |
+| `#8b2f10` | 225 | 42 |
+| `#c8763c` | 177 | 9 |
+| `#808080` | 178 | 2 |
+| `#204080` | 231 | 5 |
+| `#379836` | 236 | 13 |
+| `#f0e6d0` | 36 | 1 |
+
+Los extremos tienen un limite fisico de la escena, no del metodo: con la luz
+ambiental el negro absoluto no baja de `#262d37` y el blanco no pasa de
+`#f3f4f4`. En esos casos el material ya quedo en `#000000` o `#ffffff` y se
+muestra lo mas cercano posible.
+
+El color elegido no se toca: `piece.color` sigue siendo el hex real y es el
+que se exporta al 3MF y al MTL. La compensacion afecta solo lo que se pinta.
+Como consecuencia, la muestra del panel, el preview del picker y la paleta
+vuelven a mostrar el hex elegido directamente: ya no hace falta traducirlo,
+porque ahora la pieza se ve de ese color.
+
+Medir es caro si la sonda hereda las sombras: clonar la luz del sol con su
+`shadow.mapSize` de 2048 obliga a renderizar el shadow map en cada medicion.
+La sonda clona las luces con `castShadow = false` — nada la ocluye — y las
+11 mediciones pasan a costar 161 ms.
+
+### Contorno seleccionado que se confundia con el resto
+
+Desde `v1.0.12` la linea de contorno normal se elige por contraste contra la
+pieza, asi que sobre una pieza oscura pasa a ser clara. El resaltado de
+seleccion era blanco fijo: quedaba igual que el resto y dejaba de verse cual
+sub-cara estaba elegida. Ahora el resaltado usa el color de acento del tema,
+que se distingue tanto de una linea clara como de una oscura.
+
+### Contornos que atravesaban las paredes
+
+El contorno resaltado se dibujaba con `depthTest` desactivado para verse
+siempre, pero eso lo hacia visible tambien por detras de la pieza y la
+silueta se leia como si fuera transparente. Ahora respeta la profundidad.
+
+Version HTML/Electron: `1.0.14`.
+
 ## 2026-08-03 (seguimiento 3) - Selector de color: gama sobre gris, paleta del proyecto y cuentagotas
 
 ### La gama no hacia nada sobre una pieza blanca
