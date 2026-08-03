@@ -7,8 +7,8 @@ para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
 El proyecto adopta de forma explicita el estandar optativo de
 `INKORA Workspace\LOCAL_APP_STRUCTURE.md`. La carpeta externa queda como
-presentacion local y contiene solo `Proyecto/`, instalador, portable y acceso
-directo.
+presentacion local y contiene `Proyecto/`, instalador, portable, HTML externo y
+acceso directo.
 
 El repositorio completo vive en `Proyecto/`. La distribucion se regenera desde
 `Proyecto\electron` con:
@@ -24,6 +24,10 @@ externa y regenera el acceso directo con `electron\build\icon.ico`.
 El acceso directo apunta al runtime local de Electron dentro de
 `Proyecto\electron`, con argumentos para abrir el proyecto vivo. El portable
 queda como artefacto externo separado.
+
+Por pedido explicito del usuario, el script tambien publica
+`INKORA 3D Modeler.html` junto al portable y al instalador. Es una copia estable
+del HTML vivo del repo para abrir desde navegador.
 
 ## 2026-07 — Re-extrusión anclaba con un hueco real (~0.05mm) → piezas "flotantes" al exportar/imprimir
 

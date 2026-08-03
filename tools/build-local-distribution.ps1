@@ -7,9 +7,11 @@ $electronRoot = Join-Path $projectRoot 'electron'
 $distRoot = Join-Path $electronRoot 'dist'
 $iconPath = Join-Path $electronRoot 'build\icon.ico'
 $developmentTarget = Join-Path $electronRoot 'node_modules\electron\dist\electron.exe'
+$htmlSource = Join-Path $projectRoot 'inkora-3d-modeler-v10-corregido.html'
 
 $installerDestination = Join-Path $outerRoot 'INKORA 3D Modeler - Instalador.exe'
 $portableDestination = Join-Path $outerRoot 'INKORA 3D Modeler - Portable.exe'
+$htmlDestination = Join-Path $outerRoot 'INKORA 3D Modeler.html'
 $shortcutDestination = Join-Path $outerRoot 'INKORA 3D Modeler.lnk'
 
 function Invoke-Checked {
@@ -51,6 +53,10 @@ if (-not (Test-Path -LiteralPath $developmentTarget -PathType Leaf)) {
     throw "Development Electron runtime not found: $developmentTarget"
 }
 
+if (-not (Test-Path -LiteralPath $htmlSource -PathType Leaf)) {
+    throw "HTML source not found: $htmlSource"
+}
+
 Push-Location $electronRoot
 try {
     Invoke-Checked 'npm.cmd' @('run', 'test:geometry')
@@ -87,6 +93,7 @@ Get-Process | Where-Object {
 
 Publish-Artifact $installer.FullName $installerDestination
 Publish-Artifact $portable.FullName $portableDestination
+Publish-Artifact $htmlSource $htmlDestination
 
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutDestination)
@@ -99,4 +106,5 @@ $shortcut.Save()
 
 Write-Host "Installer: $installerDestination"
 Write-Host "Portable:  $portableDestination"
+Write-Host "HTML:      $htmlDestination"
 Write-Host "Shortcut:  $shortcutDestination"
