@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.14">
+<meta name="inkora-version" content="1.0.15">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -723,7 +723,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.14</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.15</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -952,7 +952,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.14').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.15').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -3647,6 +3647,11 @@ const Viewport = (() => {
   // del color base — oscurece por mezcla real de color si es claro, agrega
   // un glow teñido con el propio tono si es oscuro/saturado.
   function _applyHighlight(mesh, mode) {
+    /* Una pieza unida es un solo mesh con muchas sub-caras. Teñirla entera
+       no indica cual esta señalada — al contrario, tapa la diferencia. En
+       ese caso el resaltado lo hace el relleno de la sub-cara y sus lineas
+       de contorno (ver addMergedContourPickAreas y refreshContourVisuals). */
+    if (mesh.userData?._mergedPiece) { _clearHighlight(mesh); return; }
     // Guardar color original ANTES de cualquier modificación (solo la primera vez)
     if (mesh.userData._highlightOrigColor == null) {
       mesh.userData._highlightOrigColor = mesh.material.color.getHex();
@@ -5555,7 +5560,9 @@ const PanelUI = (() => {
           c.outlineMesh.visible=true;
           c.outlineMesh.material.color.set(Utils.contourDisplayColor(c.color));
           c.outlineMesh.material.opacity=0.75;
-          c.outlineMesh.material.depthTest=false;
+          // Con piezas 3D en escena, un contorno 2D sin prueba de profundidad
+          // se dibuja por encima de ellas y parece atravesar las paredes.
+          c.outlineMesh.material.depthTest=State.pieces.length>0;
           c.outlineMesh.material.depthWrite=false;
           c.outlineMesh.renderOrder=9999;
         }
@@ -5570,7 +5577,9 @@ const PanelUI = (() => {
           c.outlineMesh.visible=true;
           c.outlineMesh.material.color.set(Utils.selectedContourColor());
           c.outlineMesh.material.opacity=1;
-          c.outlineMesh.material.depthTest=false;
+          // Con piezas 3D en escena, un contorno 2D sin prueba de profundidad
+          // se dibuja por encima de ellas y parece atravesar las paredes.
+          c.outlineMesh.material.depthTest=State.pieces.length>0;
           c.outlineMesh.material.depthWrite=false;
           c.outlineMesh.renderOrder=9999;
         }
@@ -5585,12 +5594,30 @@ const PanelUI = (() => {
           c.outlineMesh.visible=true;
           c.outlineMesh.material.color.set(Utils.contourDisplayColor(c.color));
           c.outlineMesh.material.opacity=0.95;
-          c.outlineMesh.material.depthTest=false;
+          // Con piezas 3D en escena, un contorno 2D sin prueba de profundidad
+          // se dibuja por encima de ellas y parece atravesar las paredes.
+          c.outlineMesh.material.depthTest=State.pieces.length>0;
           c.outlineMesh.material.depthWrite=false;
           c.outlineMesh.renderOrder=9999;
         }
       }
     });
+    /* Relleno de la sub-cara seleccionada dentro de una pieza unida. El
+       resaltado del mesh completo aclara los 116 contornos a la vez, asi que
+       no dice nada sobre cual esta elegido: se tiñe solo su region, que es
+       justamente lo que delimitan las lineas de contorno. */
+    Viewport.group3D().traverse(o => {
+      if (!o.isMesh || o.userData?._pickContourIdx == null || !o.material) return;
+      const idx = o.userData._pickContourIdx;
+      const face = State.selectedFaces.get(idx) || 'top';
+      const on = State.selectedIdxs.has(idx) &&
+        face === (o.userData._pickFace || 'top');
+      o.material.colorWrite = on;
+      o.material.opacity = on ? 0.28 : 0;
+      o.material.color.set(Utils.accentColor());
+      o.renderOrder = 9998;
+    });
+
     Viewport.group3D().traverse(o => {
       if (!o.isLine || o.userData?._pickContourIdx == null || !o.material) return;
       const idx = o.userData._pickContourIdx;
@@ -6362,18 +6389,25 @@ const PanelUI = (() => {
   ─────────────────────────────────────────────────────────────────── */
   function addMergedContourPickAreas(mesh, items, depth) {
     const absDepth = Math.abs(depth) || 0.1;
-    const areaMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0,
-      colorWrite: false,
-      depthTest: false,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
+    // Marca que este mesh agrupa varias sub-caras: su resaltado se resuelve
+    // por sub-cara y no tiñendo la pieza entera.
+    mesh.userData._mergedPiece = true;
+    /* Cada sub-cara lleva su propio material en vez de compartir uno: es lo
+       que permite teñir SOLO la region señalada dentro de una pieza unida.
+       En reposo no escribe color, asi que sigue siendo invisible y solo
+       sirve para picking (ver refreshContourVisuals). */
     function addArea(shape, z, idx, face) {
       const g = new THREE.ShapeGeometry(shape);
       g.translate(0, 0, z);
+      const areaMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        colorWrite: false,
+        depthTest: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
       const area = new THREE.Mesh(g, areaMat);
       area.renderOrder = 9999;
       area.userData._pickContourIdx = idx;

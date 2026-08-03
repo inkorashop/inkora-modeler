@@ -3,6 +3,40 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento 5) - Resaltado por sub-cara en una pieza unida
+
+Una pieza unida es un solo mesh con muchas sub-caras. `_applyHighlight()`
+teñia el material entero, asi que señalar un detalle iluminaba los 116
+contornos a la vez: no indicaba cual estaba elegido, lo tapaba.
+
+El picking nunca estuvo mal — las 232 areas de sub-cara existian y
+`pickBest()` ya elegia la mas chica. Lo que faltaba era mostrar el resultado.
+Ahora cada area de picking lleva su propio material (antes compartian uno) y
+la de la sub-cara elegida pasa a escribir color con el acento al 28%. La
+pieza unida queda marcada con `_mergedPiece` y su resaltado global se
+desactiva.
+
+Medido sobre `Cataratas.dxf` unido, contando pixeles de acento en el
+viewport:
+
+| estado | pixeles de acento | areas encendidas |
+| --- | ---: | ---: |
+| sin seleccion | 0 | 0 |
+| una sub-cara elegida | 114 | 1 |
+
+El resaltado respeta las lineas de contorno porque usa exactamente la misma
+forma que las dibuja: el `pickShape` de ese contorno.
+
+### Contornos 2D que atravesaban las piezas
+
+Los contornos aun no extruidos se dibujaban con `depthTest` desactivado para
+no pelear con su propio relleno plano. Con piezas 3D en escena eso los
+mostraba por encima de las paredes. Ahora la prueba de profundidad se activa
+en cuanto hay al menos una pieza 3D; sin piezas, el comportamiento plano
+queda igual.
+
+Version HTML/Electron: `1.0.15`.
+
 ## 2026-08-03 (seguimiento 4) - Colores oscuros alcanzables y contornos que no traspasan
 
 ### No se podian elegir colores oscuros
