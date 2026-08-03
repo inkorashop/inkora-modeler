@@ -2,10 +2,19 @@
 
 Antes de trabajar en este proyecto, leer el contexto compartido de INKORA:
 
-- `C:\Users\compu\Desktop\Code\INKORA Workspace\README.md`
-- `C:\Users\compu\Desktop\Code\INKORA Workspace\PROJECTS.md`
-- `C:\Users\compu\Desktop\Code\INKORA Workspace\AGENTS.md`
-- `C:\Users\compu\Desktop\Code\INKORA Workspace\COREL_AUTOMATION.md`
+- `C:\Users\compu\Desktop\INKORA IA\INKORA Workspace\README.md`
+- `C:\Users\compu\Desktop\INKORA IA\INKORA Workspace\PROJECTS.md`
+- `C:\Users\compu\Desktop\INKORA IA\INKORA Workspace\AGENTS.md`
+- `C:\Users\compu\Desktop\INKORA IA\INKORA Workspace\COREL_AUTOMATION.md`
+- `C:\Users\compu\Desktop\INKORA IA\INKORA Workspace\LOCAL_APP_STRUCTURE.md`
+
+La raiz tecnica del repo vive en:
+
+```powershell
+C:\Users\compu\Desktop\INKORA IA\INKORA 3D Modeler\Proyecto
+```
+
+La distribucion local se documenta en `LOCAL_DISTRIBUTION.md`.
 
 Luego revisar el estado local:
 

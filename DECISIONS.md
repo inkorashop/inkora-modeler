@@ -3,6 +3,28 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-02 - Distribucion local estandarizada
+
+El proyecto adopta de forma explicita el estandar optativo de
+`INKORA Workspace\LOCAL_APP_STRUCTURE.md`. La carpeta externa queda como
+presentacion local y contiene solo `Proyecto/`, instalador, portable y acceso
+directo.
+
+El repositorio completo vive en `Proyecto/`. La distribucion se regenera desde
+`Proyecto\electron` con:
+
+```powershell
+npm.cmd run distribute:local
+```
+
+El script ejecuta la regresion geometrica, crea instalador NSIS y portable con
+Electron Builder, publica ambos `.exe` con nombres estables en la carpeta
+externa y regenera el acceso directo con `electron\build\icon.ico`.
+
+El acceso directo apunta al runtime local de Electron dentro de
+`Proyecto\electron`, con argumentos para abrir el proyecto vivo. El portable
+queda como artefacto externo separado.
+
 ## 2026-07 — Re-extrusión anclaba con un hueco real (~0.05mm) → piezas "flotantes" al exportar/imprimir
 
 ### Síntoma

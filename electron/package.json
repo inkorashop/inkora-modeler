@@ -9,6 +9,8 @@
     "test:geometry": "electron tests/geometry-regression.js",
     "dist:test": "electron-builder --win --dir",
     "dist:installer": "electron-builder --win nsis",
+    "dist:portable": "electron-builder --win portable",
+    "distribute:local": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\\tools\\build-local-distribution.ps1",
     "dist:publish": "electron-builder --win nsis --publish always"
   },
   "dependencies": {
@@ -62,6 +64,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "INKORA 3D Modeler - Portable.${ext}"
     }
   }
 }
