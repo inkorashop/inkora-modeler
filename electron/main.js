@@ -22,6 +22,9 @@ if (typeof electronApi === 'string') {
 
 const { app, BrowserWindow, Menu, ipcMain } = electronApi;
 const { autoUpdater } = require('electron-updater');
+// Version de la app, no la de Electron: app.getVersion() cae a la del
+// runtime cuando no se ejecuta desde el directorio empaquetado.
+const appVersion = require('./package.json').version;
 
 // En desarrollo, incluso si se abre electron/dist/win-unpacked desde el
 // acceso directo local, cargar el HTML vivo del repo evita ejecutar una copia
@@ -55,7 +58,7 @@ let mainWindow = null;
 
 function createWindow() {
   const win = new BrowserWindow({
-    title: `INKORA 3D Modeler v${app.getVersion()}`,
+    title: `INKORA 3D Modeler v${appVersion}`,
     width: 1440,
     height: 960,
     minWidth: 960,
@@ -67,6 +70,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
+      // El preload lee la version de aca en vez de package.json, que el
+      // sandbox del renderer no le deja requerir.
+      additionalArguments: [`--inkora-version=${appVersion}`],
     },
   });
 

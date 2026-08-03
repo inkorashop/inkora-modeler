@@ -1,5 +1,14 @@
 const { contextBridge, ipcRenderer } = require('electron');
-const { version } = require('./package.json');
+
+// La version llega como argumento del proceso, no leyendo package.json.
+// El renderer corre con sandbox activado y ahi `require` solo resuelve los
+// modulos que provee Electron: `require('./package.json')` lanzaba y hacia
+// fallar el preload ENTERO, dejando la pagina sin inkoraSlicer, sin
+// inkoraUpdater y sin inkoraAppInfo. El sintoma visible era "Abrir en
+// laminador" siempre deshabilitado dentro de la app de escritorio.
+const version = (process.argv
+  .find(arg => arg.startsWith('--inkora-version=')) || '')
+  .split('=')[1] || '';
 
 // Puente seguro entre el proceso principal (donde vive electron-updater) y la
 // página (inkora-3d-modeler-v10-corregido.html). Si el HTML se abre en un

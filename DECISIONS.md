@@ -3,6 +3,39 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento 6) - El preload nunca cargaba en la app de escritorio
+
+"Abrir en laminador" aparecia siempre deshabilitado dentro de la app, aun con
+piezas 3D en escena. La causa no estaba en el boton: el preload entero fallaba
+al cargar.
+
+`preload.js` hacia `require('./package.json')` para leer la version. Desde
+Electron 20 el renderer corre con `sandbox: true` por defecto, y ahi `require`
+solo resuelve los modulos que provee Electron: requerir un archivo del disco
+lanza y aborta el preload completo. Sin preload no existian `inkoraSlicer`,
+`inkoraUpdater` ni `inkoraAppInfo`, asi que ademas **el auto-updater tampoco
+funcionaba** y la version visible salia del fallback del HTML.
+
+El sintoma aparecio recien ahora porque hasta `v1.0.12` el control estaba
+oculto con `display:none` fuera de Electron; al hacerlo siempre visible quedo
+a la vista que dentro de la app tampoco se habilitaba.
+
+Se corrige sin bajar el sandbox: `main.js` pasa la version por
+`additionalArguments` y el preload la lee de `process.argv`. Verificado con
+las mismas `webPreferences` que usa la app real, sin `sandbox: false`:
+`inkoraSlicer`, `inkoraUpdater` e `inkoraAppInfo` presentes y cero errores de
+consola.
+
+`main.js` usa `require('./package.json').version` y no `app.getVersion()`,
+que cae a la version del runtime de Electron cuando no se ejecuta desde el
+directorio empaquetado.
+
+El acceso directo local apunta a `Proyecto\electron` con argumento `.`, asi
+que toma `main.js` y `preload.js` del repo: alcanza con reabrir la app. Un
+instalador ya generado necesita `npm run distribute:local`.
+
+Version HTML/Electron: `1.0.16`.
+
 ## 2026-08-03 (seguimiento 5) - Resaltado por sub-cara en una pieza unida
 
 Una pieza unida es un solo mesh con muchas sub-caras. `_applyHighlight()`
