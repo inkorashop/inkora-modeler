@@ -3,6 +3,42 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento 3) - Selector de color: gama sobre gris, paleta del proyecto y cuentagotas
+
+### La gama no hacia nada sobre una pieza blanca
+
+No era un problema de sincronizacion del deslizante: con saturacion 0,
+`hsvToHex()` devuelve el mismo gris para cualquier angulo. El color por
+defecto de una pieza es blanco, asi que arrastrar la gama daba exactamente
+`#ffffff` una y otra vez. Medido: mover la gama al 50% sobre `#ffffff`
+dejaba `#ffffff`; recien al tocar el cuadrado aparecia el color.
+
+Al tocar la gama se asume que se quiere un color, asi que se sale de la
+linea de grises lo minimo necesario (`s = 1` si `s < 0.05`, `v = 0.9` si
+`v < 0.1`). Con eso, la gama al 50% sobre blanco da `#00ffff`.
+
+### El preview mostraba otra referencia que el resto
+
+Desde `v1.0.12` la muestra del panel y la pieza usan el color visible. El
+preview del picker seguia mostrando el hex crudo, asi que quedaban dos
+referencias distintas para el mismo color. Ahora el preview tambien muestra
+el color visible y el codigo real se lee al lado, sobre el propio preview,
+con contraste calculado. El color que se exporta sigue siendo el hex crudo.
+
+### Paleta del proyecto y cuentagotas
+
+- Debajo del preview aparecen los colores unicos ya usados por alguna pieza.
+  Se pintan con el color visible y muestran el codigo real al pasar el
+  mouse, sin cambiar todavia la pieza; al hacer click se aplica y se cierra.
+  La lista se reconstruye solo cuando cambia su firma, para no rearmar el
+  DOM en cada movimiento del cursor sobre el cuadrado.
+- El cuentagotas usa la API `EyeDropper` del navegador, asi que toma color
+  de cualquier parte de la pantalla y no solo del viewport. Donde no exista,
+  el boton queda deshabilitado con el motivo en el tooltip en vez de fallar
+  al hacer click.
+
+Version HTML/Electron: `1.0.13`.
+
 ## 2026-08-03 (seguimiento 2) - Color visible, contraste de contorno y controles de la barra
 
 ### El swatch mostraba el hex crudo, no el color que se ve

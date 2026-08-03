@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.12">
+<meta name="inkora-version" content="1.0.13">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -155,6 +155,37 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .btn.danger{border-color:rgba(255,79,79,.4);color:var(--danger);background:transparent}
 .btn.danger:hover{background:rgba(255,79,79,.08);border-color:var(--danger)}
 .export-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}
+/* ── Selector de color ── */
+.cp-row{display:flex;align-items:center;gap:6px;margin-top:8px}
+#color-preview{
+  flex:1;height:20px;border-radius:4px;border:1px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;background:#c8c8d0;
+}
+#color-hex{
+  font-family:var(--mono);font-size:9px;letter-spacing:.06em;
+  user-select:all;pointer-events:auto;
+}
+.cp-eyedropper{
+  width:24px;height:22px;flex-shrink:0;padding:0;border-radius:4px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text-dim);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:color .12s,border-color .12s,background .12s;
+}
+.cp-eyedropper:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-dim)}
+.cp-eyedropper svg{width:13px;height:13px;display:block}
+.cp-eyedropper[disabled]{opacity:.4;cursor:default}
+.cp-label{
+  margin-top:9px;font-size:8px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--text-faint);
+}
+#color-recents{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:180px}
+.cp-recent{
+  width:18px;height:18px;border-radius:3px;cursor:pointer;padding:0;
+  border:1px solid rgba(255,255,255,.16);transition:transform .1s,box-shadow .1s;
+}
+.cp-recent:hover{transform:scale(1.12);box-shadow:0 0 0 1px var(--accent)}
+.cp-recent[data-current="true"]{box-shadow:0 0 0 1px var(--accent)}
+
 /* Separacion al exportar: un solo control. El borde vive en el contenedor,
    no en cada parte, para que el interruptor y el valor se lean como una
    sola cosa. Apagado se atenua entero pero el valor sigue visible: es el
@@ -692,7 +723,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.12</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.13</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -904,13 +935,24 @@ html.light{
 <div id="color-popover" style="position:fixed;display:none;z-index:250;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.35);touch-action:none;">
   <canvas id="color-square" width="180" height="120" style="display:block;width:180px;height:120px;cursor:crosshair;border-radius:4px;border:1px solid var(--border2);"></canvas>
   <canvas id="color-hue" width="180" height="14" style="display:block;width:180px;height:14px;cursor:crosshair;border-radius:4px;border:1px solid var(--border2);margin-top:8px;"></canvas>
-  <div id="color-preview" style="height:16px;border-radius:4px;border:1px solid var(--border2);margin-top:8px;background:#c8c8d0;"></div>
+  <div class="cp-row">
+    <div id="color-preview" title="Color elegido"><span id="color-hex">#C8C8D0</span></div>
+    <button id="color-eyedropper" class="cp-eyedropper" type="button"
+            title="Tomar un color de cualquier parte de la pantalla"
+            aria-label="Cuentagotas">
+      <svg viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M9.2 2.1a1.7 1.7 0 0 1 2.4 2.4l-1 1 .7.7-1.1 1.1-.7-.7-4.3 4.3-2.4.6.6-2.4 4.3-4.3-.7-.7L8.1 3l.7.7 1-1z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+  <div id="color-recents-wrap" style="display:none">
+    <div class="cp-label">Colores del proyecto</div>
+    <div id="color-recents"></div>
+  </div>
 </div>
 
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.12').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.13').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -9206,6 +9248,10 @@ const PanelUI = (() => {
     const square = document.getElementById('color-square');
     const hue = document.getElementById('color-hue');
     const preview = document.getElementById('color-preview');
+    const hexLabel = document.getElementById('color-hex');
+    const eyedropper = document.getElementById('color-eyedropper');
+    const recents = document.getElementById('color-recents');
+    const recentsWrap = document.getElementById('color-recents-wrap');
     const sctx = square.getContext('2d');
     const hctx = hue.getContext('2d');
     let h = 0, s = 0, v = 0.78;
@@ -9277,16 +9323,83 @@ const PanelUI = (() => {
       sctx.stroke();
     }
 
+    /* El preview muestra el color como se vera en la pieza, igual que la
+       muestra del panel: el hex crudo se ve bastante mas oscuro que el
+       objeto iluminado y comparar dos referencias distintas confunde. El
+       codigo que se lee al lado sigue siendo el color real, que es el que
+       se exporta al 3MF y al MTL. */
+    function paintPreview(hex) {
+      const shown = Viewport.shadedColor(hex);
+      preview.style.background = shown;
+      hexLabel.textContent = hex.toUpperCase();
+      hexLabel.style.color = Utils.contrastingLineColor(shown);
+      preview.title = `Color ${hex.toUpperCase()}`;
+    }
+
     function redraw() {
       drawSquare();
       drawHue();
-      preview.style.background = currentHex();
+      paintPreview(currentHex());
+      renderRecents();
+    }
+
+    /* Paleta del proyecto: los colores que ya se usaron en alguna pieza.
+       Sirve para repetir un color en otra pieza sin tener que acertarlo de
+       nuevo en el cuadrado. Se muestran con el color visible y el codigo
+       real aparece al pasar el mouse. */
+    function projectColors() {
+      const used = State.pieces
+        .map(piece => (piece.color || '').toLowerCase())
+        .filter(color => /^#[0-9a-f]{6}$/.test(color));
+      return [...new Set(used)];
+    }
+
+    function renderRecents() {
+      const colors = projectColors();
+      recentsWrap.style.display = colors.length ? '' : 'none';
+      if (!colors.length) { recents.textContent = ''; return; }
+      const current = currentHex().toLowerCase();
+      const signature = colors.join(',') + '|' + current;
+      if (recents.dataset.signature === signature) return;
+      recents.dataset.signature = signature;
+      recents.textContent = '';
+      colors.forEach(hex => {
+        const swatch = document.createElement('button');
+        swatch.type = 'button';
+        swatch.className = 'cp-recent';
+        swatch.style.background = Viewport.shadedColor(hex);
+        swatch.title = hex.toUpperCase();
+        swatch.dataset.color = hex;
+        if (hex === current) swatch.dataset.current = 'true';
+        // Mostrar el codigo en la fila de arriba mientras se recorre la
+        // paleta, sin cambiar todavia el color de la pieza.
+        swatch.addEventListener('mouseenter', () => {
+          hexLabel.textContent = hex.toUpperCase();
+          hexLabel.style.color = Utils.contrastingLineColor(preview.style.background);
+        });
+        swatch.addEventListener('mouseleave', () => {
+          hexLabel.textContent = currentHex().toUpperCase();
+        });
+        swatch.addEventListener('click', event => {
+          event.stopPropagation();
+          setColor(hex);
+          closePicker(true);
+        });
+        recents.append(swatch);
+      });
+    }
+
+    function setColor(hex) {
+      const hsv = hexToHsv(hex);
+      h = hsv.h; s = hsv.s; v = hsv.v;
+      redraw();
+      applyLive();
     }
 
     function applyLive() {
       const hex = currentHex();
       pop.dataset.color = hex;
-      preview.style.background = hex;
+      paintPreview(hex);
       PanelUI.applyColorToSelection(hex, false);
     }
     function closePicker(commit = true) {
@@ -9318,6 +9431,14 @@ const PanelUI = (() => {
     function pickFromHue(e) {
       const r = hue.getBoundingClientRect();
       h = Utils.clamp((e.clientX - r.left) / r.width, 0, 1) * 360;
+      /* Sobre un gris el tono no existe: con saturacion 0, hsvToHex()
+         devuelve el mismo gris para cualquier angulo. Arrastrar la gama
+         parecia no hacer nada — el caso real es una pieza blanca, que es el
+         color por defecto. Al tocar la gama se asume que se quiere un color,
+         asi que se saca de la linea de grises lo minimo necesario para que
+         el tono elegido se vea. */
+      if (s < 0.05) s = 1;
+      if (v < 0.1) v = 0.9;
       redraw();
       applyLive();
     }
@@ -9334,6 +9455,30 @@ const PanelUI = (() => {
       if (kind === 'hue') suppressOutsideClose();
       if (kind === 'square') pickFromSquare(e);
       else pickFromHue(e);
+    }
+
+    /* Cuentagotas del sistema: toma un color de cualquier parte de la
+       pantalla, no solo del viewport. Lo provee el navegador (EyeDropper);
+       si no existe, el boton queda deshabilitado en vez de fallar al
+       hacer click. */
+    if (!window.EyeDropper) {
+      eyedropper.disabled = true;
+      eyedropper.title = 'El cuentagotas no esta disponible en este navegador.';
+    } else {
+      eyedropper.addEventListener('click', async event => {
+        event.stopPropagation();
+        suppressOutsideClose(1200);
+        try {
+          const result = await new window.EyeDropper().open();
+          const hex = String(result?.sRGBHex || '').toLowerCase();
+          if (!/^#[0-9a-f]{6}$/.test(hex)) return;
+          setColor(hex);
+          hexLabel.textContent = hex.toUpperCase();
+        } catch (_) {
+          // Cancelar con Escape es normal, no es un error que reportar.
+        }
+        suppressOutsideClose(400);
+      });
     }
 
     square.addEventListener('pointerdown', e => startPick('square', e));
