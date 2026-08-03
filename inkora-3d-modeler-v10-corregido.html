@@ -8489,6 +8489,11 @@ const PanelUI = (() => {
             Number.isFinite(Number(hole.depth)) &&
             Number(hole.depth) !== sourceDepth + 1) return;
         if (holeIdxs.includes(holeIdx)) return;
+        // Mismo criterio que absorbChildren: un anillo hijo con la misma
+        // area que su padre no encierra un interior, es la misma frontera
+        // con otro rol. Restarlo deja la cara sin material y la re-extrusion
+        // aborta entera (ver GEOMETRY_PIPELINE, seccion 13).
+        if (!enclosesInterior(source.shape, hole.shape)) return;
 
         // Que el interior esté seleccionado por pertenecer a una pieza unida
         // no cambia su papel topológico: sigue perforando la cara exterior.
@@ -8555,6 +8560,7 @@ const PanelUI = (() => {
           : holeIdx;
         const holeSource = State.contours[holeSourceIdx] || hole;
         if (holeSource.parentIdx !== sourceIdx || holeIdxs.includes(holeSourceIdx)) return;
+        if (!enclosesInterior(source.shape || c.shape, holeSource.shape)) return;
         compositeShape.holes.push(WindingUtils.makeHoleCW(holeSource.shape));
         holeIdxs.push(holeSourceIdx);
       });

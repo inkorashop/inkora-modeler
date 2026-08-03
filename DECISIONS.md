@@ -81,15 +81,31 @@ todo seleccionado, una cara cuyos huecos la cubren entera dejaba la union 2D
 vacia. En `HEAD` eso no daba error, colgaba la aplicacion (se aborto la
 medicion a los 20 minutos). Ahora esa cara se descarta y se informa.
 
+### Re-extrusion: el guard faltaba en el camino 3D
+
+La causa no era el solido canonico sino que `addFaceTopology()` y el
+respaldo por `_holeIdxs` agregaban huecos sin el chequeo `enclosesInterior()`
+que si tenia `absorbChildren()`. Con un anillo hijo coincidente (contorno 14
+del Tucan, gemelo exacto del 0) la cara quedaba sin material y la
+re-extrusion abortaba entera.
+
+Con el guard en los tres puntos:
+
+| | antes | ahora |
+| --- | ---: | ---: |
+| Re-extruir pieza unida | abortaba | 1 pieza, UNDO correcto |
+| Re-extruir 16 piezas separadas | 0 (colgaba en `HEAD`) | 16 |
+
 ### Queda abierto
 
-Re-extruir una pieza **unida** todavia falla con `La union 2D produjo una
-pieza vacia`. La re-extrusion reconstruye el shape desde el contorno
-primario del merge y le resta los `_holeIdxs` de toda la pieza, que no le
-pertenecen. Lo correcto es re-extruir desde el solido canonico que la pieza
-ya guarda en `mesh.userData._solidShapes`. Es un defecto anterior a este
-cambio; antes colgaba, ahora falla rapido y con mensaje. En modo separado la
-re-extrusion si funciona.
+Re-extruir las 16 piezas separadas del Tucan crea las 16 pero despues lanza
+`La union 2D produjo una pieza vacia`, y el `throw` corta el handler antes
+de `History.push`: las piezas quedan en escena sin snapshot y el siguiente
+UNDO salta al estado importado en vez de al anterior. El chequeo de area que
+descarta caras sin material es aritmetico (`outer - suma de huecos`) y no
+cubre huecos que se solapan entre si o exceden el contorno; para eso hace
+falta medir el area resultante con Clipper. Independiente de eso, una pieza
+que falla no deberia abortar el lote entero.
 
 ### Regresion
 
