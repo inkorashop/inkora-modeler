@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.9">
+<meta name="inkora-version" content="1.0.10">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -659,7 +659,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.9</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.10</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -850,7 +850,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.9').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.10').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -1044,15 +1044,53 @@ const DXFParser = (() => {
 
   function toArr(v) { return v == null ? [] : Array.isArray(v) ? v : [v]; }
   function pf(v)    { return parseFloat(v) || 0; }
-  const ACI = {
-    1: '#ff0000', 2: '#ffff00', 3: '#00ff00', 4: '#00ffff',
-    5: '#0000ff', 6: '#ff00ff', 7: '#ffffff', 8: '#808080', 9: '#c0c0c0',
-    10: '#ff0000', 30: '#ff7f00', 50: '#ffff00', 70: '#7fff00',
-    90: '#00ff00', 110: '#00ff7f', 130: '#00ffff', 150: '#007fff',
-    170: '#0000ff', 190: '#7f00ff', 210: '#ff00ff', 230: '#ff007f',
-    250: '#333333', 251: '#505050', 252: '#696969', 253: '#828282',
-    254: '#bebebe', 255: '#ffffff',
-  };
+  /* ── Paleta ACI completa (1-255) ───────────────────────────────────────
+     El indice de color de AutoCAD no es decorativo: el importador lo usa
+     como parte de la identidad de estilo de cada entidad (ver
+     dxfPaintStyleKey / buildDXFMaterialItems). Una tabla incompleta hace
+     que indices distintos caigan en el mismo color por defecto, todas las
+     entidades queden en una sola tirada de estilo y objetos independientes
+     se fusionen en un unico compuesto par/impar — con sus interiores
+     clasificados como huecos. Por eso 10..249 se generan con el modelo
+     documentado de AutoCAD (24 tonos x 10 niveles) en vez de listar solo
+     algunos indices sueltos.
+  ─────────────────────────────────────────────────────────────────────── */
+  const ACI = (() => {
+    const table = {
+      1: '#ff0000', 2: '#ffff00', 3: '#00ff00', 4: '#00ffff',
+      5: '#0000ff', 6: '#ff00ff', 7: '#ffffff', 8: '#808080', 9: '#c0c0c0',
+      250: '#333333', 251: '#505050', 252: '#696969', 253: '#828282',
+      254: '#bebebe', 255: '#ffffff',
+    };
+    // Cada tono ocupa 10 indices consecutivos: 5 valores de brillo, cada
+    // uno en version saturada y en version lavada al 50%.
+    const LEVELS = [
+      [1.00, 1.0], [1.00, 0.5],
+      [0.65, 1.0], [0.65, 0.5],
+      [0.50, 1.0], [0.50, 0.5],
+      [0.30, 1.0], [0.30, 0.5],
+      [0.15, 1.0], [0.15, 0.5],
+    ];
+    const hex = n => Math.max(0, Math.min(255, Math.round(n * 255)))
+      .toString(16).padStart(2, '0');
+    for (let index = 10; index <= 249; index++) {
+      const offset = index - 10;
+      const hue = (Math.floor(offset / 10) * 15) % 360;
+      const [value, saturation] = LEVELS[offset % 10];
+      const chroma = value * saturation;
+      const sector = hue / 60;
+      const second = chroma * (1 - Math.abs((sector % 2) - 1));
+      const base = sector < 1 ? [chroma, second, 0]
+        : sector < 2 ? [second, chroma, 0]
+        : sector < 3 ? [0, chroma, second]
+        : sector < 4 ? [0, second, chroma]
+        : sector < 5 ? [second, 0, chroma]
+        : [chroma, 0, second];
+      const min = value - chroma;
+      table[index] = `#${base.map(channel => hex(channel + min)).join('')}`;
+    }
+    return table;
+  })();
   function normalizeHex(hex) {
     const s = String(hex || '').replace(/^#/, '').trim();
     return /^[0-9a-f]{6}$/i.test(s) ? `#${s.toLowerCase()}` : null;
@@ -2280,6 +2318,30 @@ const Solid2D = (() => {
     return adjusted;
   }
 
+  function unionInto(lib, subject, clip, solution) {
+    const clipper = new lib.Clipper();
+    clipper.StrictlySimple = true;
+    clipper.PreserveCollinear = false;
+    clipper.AddPaths(subject, lib.PolyType.ptSubject, true);
+    if (clip?.length) clipper.AddPaths(clip, lib.PolyType.ptClip, true);
+    return clipper.Execute(
+      lib.ClipType.ctUnion,
+      solution,
+      lib.PolyFillType.pftNonZero,
+      lib.PolyFillType.pftNonZero
+    );
+  }
+
+  function pathsMinCorner(paths) {
+    let X = Infinity;
+    let Y = Infinity;
+    paths.forEach(path => path.forEach(point => {
+      if (point.X < X) X = point.X;
+      if (point.Y < Y) Y = point.Y;
+    }));
+    return { X, Y };
+  }
+
   function unionShapes(shapes) {
     const sourceShapes = (shapes || []).filter(shape => shape?.curves?.length);
     if (!sourceShapes.length) return [];
@@ -2302,30 +2364,42 @@ const Solid2D = (() => {
     }).filter(paths => paths.length);
     if (!shapePaths.length) return [];
 
-    let tree = null;
-    let accumulated = [];
-    shapePaths.forEach((nextPaths, index) => {
-      const clipper = new lib.Clipper();
-      clipper.StrictlySimple = true;
-      clipper.PreserveCollinear = false;
-      if (accumulated.length) {
-        clipper.AddPaths(accumulated, lib.PolyType.ptSubject, true);
-        clipper.AddPaths(nextPaths, lib.PolyType.ptClip, true);
-      } else {
-        clipper.AddPaths(nextPaths, lib.PolyType.ptSubject, true);
-      }
-      tree = new lib.PolyTree();
-      const ok = clipper.Execute(
-        lib.ClipType.ctUnion,
-        tree,
-        lib.PolyFillType.pftNonZero,
-        lib.PolyFillType.pftNonZero
-      );
-      if (!ok) {
-        throw new Error(`No se pudo consolidar la region 2D ${index + 1}.`);
-      }
-      accumulated = lib.Clipper.PolyTreeToPaths(tree);
+    /* Union por pares, en arbol.
+       Cada Execute sigue viendo exactamente dos regiones ya consolidadas
+       — nunca una carga masiva de contornos crudos, que es lo que puede
+       dejar segmentos coincidentes en la salida. Lo que cambia respecto
+       del acumulado lineal es cuantas veces se vuelve a recorrer el
+       resultado parcial: el acumulado lineal lo reprocesa una vez por
+       shape (O(N * M)), el arbol solo log2(N) veces (O(M log N)). En un
+       diseño de 133 contornos eso baja de ~80 s a menos de 1 s sin
+       cambiar la operacion booleana.
+       El orden espacial hace que se fusionen primero las piezas vecinas,
+       para que los resultados intermedios se mantengan compactos.        */
+    const ordered = [...shapePaths].sort((left, right) => {
+      const a = pathsMinCorner(left);
+      const b = pathsMinCorner(right);
+      return a.X - b.X || a.Y - b.Y;
     });
+
+    let level = ordered;
+    while (level.length > 1) {
+      const merged = [];
+      for (let index = 0; index < level.length; index += 2) {
+        if (index + 1 === level.length) { merged.push(level[index]); continue; }
+        const solution = [];
+        if (!unionInto(lib, level[index], level[index + 1], solution)) {
+          throw new Error(`No se pudo consolidar la region 2D ${merged.length + 1}.`);
+        }
+        merged.push(solution);
+      }
+      level = merged;
+    }
+    if (!level[0]?.length) return [];
+
+    const tree = new lib.PolyTree();
+    if (!unionInto(lib, level[0], null, tree)) {
+      throw new Error('No se pudo consolidar la pieza unida.');
+    }
 
     const solids = [];
     function addOuter(node) {
@@ -4308,7 +4382,14 @@ const Exporter = (() => {
     for (let i = 0; i < srcIndices.length; i += 3) {
       const a = srcIndices[i], b = srcIndices[i + 1], c = srcIndices[i + 2];
       if (a === b || b === c || c === a) continue;
-      if (area2(a, b, c) < 1e-12) continue;
+      /* Descartar un triangulo abre sus aristas. El umbral solo puede cubrir
+         el caso realmente degenerado (tres vertices colineales exactos): un
+         triangulo fino pero valido forma parte de la superficie cerrada y
+         quitarlo deja el borde abierto. La grilla canonica de Clipper es de
+         1e-4 mm, asi que una cara legitima puede tener area de 1e-8 mm2
+         (area2 ~ 1e-16) — muy por debajo del limite anterior de 1e-12, que
+         vaciaba cada tira delgada de un diseño con muchas curvas. */
+      if (area2(a, b, c) < 1e-24) continue;
       const key = [a, b, c].sort((x, y) => x - y).join(',');
       if (seen.has(key)) continue;
       seen.add(key);
@@ -5694,6 +5775,29 @@ const PanelUI = (() => {
     _lastMouse.y = e.clientY;
   });
 
+  /* ── enclosesInterior ──────────────────────────────────────────────────
+     Un anillo hijo con la misma área que su padre no encierra una región
+     interior: es la misma frontera cumpliendo dos roles dentro del diseño
+     por capas (ver GEOMETRY_PIPELINE, sección 1). Restarlo como hueco no
+     deja un agujero, deja la pieza sin material — la unión 2D se queda sin
+     sólido y la extrusión completa aborta. Solo se acepta como hueco un
+     hijo estrictamente más chico.
+  ─────────────────────────────────────────────────────────────────────── */
+  function ringArea(shape) {
+    const pts = shape?.getPoints?.(64) || [];
+    let area = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      area += pts[j].x * pts[i].y - pts[i].x * pts[j].y;
+    }
+    return Math.abs(area) / 2;
+  }
+  function enclosesInterior(parentShape, childShape) {
+    const parentArea = ringArea(parentShape);
+    const childArea = ringArea(childShape);
+    return parentArea > 0 && childArea > 0 &&
+      childArea < parentArea * (1 - 1e-6);
+  }
+
   function directHoleShapes(contours, parentIdx) {
     const parent = contours[parentIdx];
     if (!parent) return [];
@@ -5704,7 +5808,8 @@ const PanelUI = (() => {
         !child._deleted &&
         !child.deleted &&
         child.parentIdx === parentIdx &&
-        child.depth === parent.depth + 1
+        child.depth === parent.depth + 1 &&
+        enclosesInterior(parent.shape, child.shape)
       )
       .map(child => child.shape);
   }
@@ -7609,20 +7714,29 @@ const PanelUI = (() => {
         return { minX, minY, maxX, maxY };
       }
 
+      /* La caja de pantalla se calcula proyectando los vertices reales de
+         la geometria, no las ocho esquinas de un Box3 del mundo. El Box3
+         es un envolvente alineado a los ejes del modelo: para una forma
+         diagonal, curva o vista en perspectiva puede sobresalir bastante
+         de la silueta dibujada, y entonces una pieza que el usuario ve
+         cubierta al 100% queda fuera del rectangulo y no se selecciona.
+         Solo se miran los vertices del propio mesh: los hijos de una
+         pieza son decorativos o de picking (ver GeoModule.getPieceRealBox). */
+      const _vertex = new THREE.Vector3();
       function meshScreenBox(mesh) {
-        if (!mesh) return null;
-        const box3 = new THREE.Box3().setFromObject(mesh);
-        if (box3.isEmpty()) return null;
-        return bboxFromWorldPoints([
-          new THREE.Vector3(box3.min.x, box3.min.y, box3.min.z),
-          new THREE.Vector3(box3.max.x, box3.min.y, box3.min.z),
-          new THREE.Vector3(box3.min.x, box3.max.y, box3.min.z),
-          new THREE.Vector3(box3.max.x, box3.max.y, box3.min.z),
-          new THREE.Vector3(box3.min.x, box3.min.y, box3.max.z),
-          new THREE.Vector3(box3.max.x, box3.min.y, box3.max.z),
-          new THREE.Vector3(box3.min.x, box3.max.y, box3.max.z),
-          new THREE.Vector3(box3.max.x, box3.max.y, box3.max.z),
-        ]);
+        const position = mesh?.geometry?.attributes?.position;
+        if (!position || !position.count) return null;
+        mesh.updateMatrixWorld(true);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < position.count; i++) {
+          _vertex.fromBufferAttribute(position, i).applyMatrix4(mesh.matrixWorld);
+          const s = projectToScreen(_vertex);
+          if (s.x < minX) minX = s.x;
+          if (s.y < minY) minY = s.y;
+          if (s.x > maxX) maxX = s.x;
+          if (s.y > maxY) maxY = s.y;
+        }
+        return { minX, minY, maxX, maxY };
       }
 
       function contourScreenBox(c, idx, face = 'top') {
@@ -7655,9 +7769,9 @@ const PanelUI = (() => {
         }
       });
 
-      if (!toSelect.length) return;
-
-      // Aplicar selección (reemplaza la selección actual)
+      // Un marquee que no cubre nada deselecciona, igual que el click sobre
+      // el fondo. Salir antes de refrescar dejaba el panel y el badge
+      // mostrando la selección anterior, ya inexistente.
       PanelUI.clearAllSelection();
       toSelect.forEach(({ idx, face }) => {
         const c = State.contours[idx];
@@ -7738,7 +7852,7 @@ const PanelUI = (() => {
   }
 
   async function loadDXF(file){
-    const isSVG = /\.svg$/i.test(file.name);
+    const isSVG = /\.svg$/i.test(file.name || '') || file.type === 'image/svg+xml';
     const parser = isSVG ? SVGParser : DXFParser;
     Utils.toast(isSVG ? 'Leyendo SVG…' : 'Leyendo DXF…','',60000);
     try {
@@ -7784,9 +7898,34 @@ const PanelUI = (() => {
     } catch(err){Utils.toast('Error: '+err.message,'err');console.error(err);return false;}
   }
 
+  // Archivo .dxf/.svg copiado como archivo (Ctrl+C en el explorador). Llega
+  // en clipboardData.files, no como texto: se resuelve con el mismo
+  // loadDXF() del botón Importar, así conserva encoding latin1 del DXF y el
+  // nombre del archivo como nombre de proyecto.
+  function _clipboardModelFile(clipboardData){
+    const files = [
+      ...(clipboardData?.files || []),
+      ...[...(clipboardData?.items || [])]
+        .filter(item => item.kind === 'file')
+        .map(item => item.getAsFile())
+        .filter(Boolean),
+    ];
+    return files.find(file =>
+      /\.(dxf|svg)$/i.test(file.name || '') ||
+      file.type === 'image/svg+xml'
+    ) || null;
+  }
+
   document.addEventListener('paste', async e=>{
     const tag=document.activeElement?.tagName;
     if(tag==='INPUT'||tag==='TEXTAREA') return; // dejar que los inputs reciban el paste normal
+
+    const pastedFile=_clipboardModelFile(e.clipboardData);
+    if(pastedFile){
+      e.preventDefault();
+      await loadDXF(pastedFile);
+      return;
+    }
 
     let svgText='';
     // 1) MIME type nativo image/svg+xml (algunos exportadores lo escriben así)
@@ -7926,6 +8065,7 @@ const PanelUI = (() => {
         if (candidate.depth !== parentDepth + 1) return;
         // Si el usuario seleccionó este contorno, se extruirá como pieza independiente
         if (State.selectedIdxs.has(cidx)) return;
+        if (!enclosesInterior(parent.shape, candidate.shape)) return;
 
         // Hueco directo → agregar como hole del shape padre (debe ser CW)
         const holePath = WindingUtils.makeHoleCW(candidate.shape);
@@ -7973,6 +8113,7 @@ const PanelUI = (() => {
 
     const merged2D = State.extrudeMode === 'merged' && selected.length > 1;
     const mergedItems = [];
+    let coveredByChildren = 0;
 
     selected.forEach((c, i) => {
       if (absorbed.has(c)) return;
@@ -7992,6 +8133,7 @@ const PanelUI = (() => {
         holeIdxs,
         solidIslandIdxs
       );
+      const absorbedHoles = holeIdxs.length;
 
       // Agregar interiores seleccionados como holes del exterior para evitar solapamiento
       State.contours.forEach((candidate, cidx) => {
@@ -8001,9 +8143,27 @@ const PanelUI = (() => {
         if (candidate.depth !== c.depth + 1) return;
         // Solo si también está seleccionado — se extruirá como pieza propia
         if (!selectedSet.has(candidate)) return;
+        if (!enclosesInterior(c.shape, candidate.shape)) return;
         const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
       });
+
+      /* Con "seleccionar todo", los hijos seleccionados de un contorno
+         pueden cubrir exactamente todo su interior. Ese contorno ya no
+         aporta material propio: la unión 2D queda vacía y, al lanzar, se
+         abortaba la extrusión entera dejando cero piezas. El material no se
+         pierde — lo aporta cada hijo como pieza propia. Solo se descarta
+         cuando el contorno no absorbió nada: si absorbió huecos o islas, un
+         área nula significa otra cosa y debe seguir siendo un error visible. */
+      const outerArea = ringArea(compositeShape);
+      const holesArea = compositeShape.holes.reduce(
+        (sum, hole) => sum + ringArea(hole), 0
+      );
+      if (!absorbedHoles && !extraShapes.length &&
+          outerArea - holesArea <= outerArea * 1e-6) {
+        coveredByChildren++;
+        return;
+      }
 
       if (merged2D) {
         State.contours.forEach((candidate, cidx) => {
@@ -8335,7 +8495,9 @@ const PanelUI = (() => {
     PanelUI.refreshContourVisuals();PanelUI.renderList();PanelUI.updateModeBadge();PanelUI.updateButtons();
     PanelUI.updateColorPanel();
     History.push(State);
-    const pieceCount2D = merged2D && mergedItems.length ? 1 : selected.length;
+    const pieceCount2D = merged2D && mergedItems.length
+      ? 1
+      : selected.length - coveredByChildren;
     const piece3DCount = created3DCount;
     const totalNew = pieceCount2D + piece3DCount;
     const holeCount  = absorbed.size;
@@ -8345,7 +8507,10 @@ const PanelUI = (() => {
     const msg = holeCount > 0
       ? `${totalNew} pieza(s) extruida(s) a ${depthLabel} (${holeCount} hueco(s) aplicado(s)).`
       : `${totalNew} pieza(s) extruida(s) a ${depthLabel}.`;
-    Utils.toast(msg, 'ok');
+    const coveredMsg = coveredByChildren > 0
+      ? ` ${coveredByChildren} contorno(s) quedaron cubiertos por sus piezas internas.`
+      : '';
+    Utils.toast(msg + coveredMsg, 'ok');
   });
 
   document.getElementById('btn-sel-all').addEventListener('click',()=>{PanelUI.selectAll();PanelUI.updateModeBadge();});

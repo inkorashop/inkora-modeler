@@ -280,8 +280,15 @@ contornos logicos
   -> triangulacion para viewport y exportacion
 ```
 
-La union es incremental porque una union masiva puede conservar segmentos
-coincidentes en la salida de ciertas composiciones. El resultado debe cumplir:
+La union nunca carga de golpe todos los contornos crudos: una union masiva
+puede conservar segmentos coincidentes en la salida de ciertas composiciones.
+Desde `v1.0.10` se hace **por pares, en arbol**, no acumulando de a un shape
+por vez. Cada `Execute` sigue viendo exactamente dos regiones ya
+consolidadas, que era la propiedad que importaba; lo que cambia es cuantas
+veces se reprocesa el resultado parcial: `O(M log N)` en vez de `O(N * M)`.
+Las hojas se ordenan espacialmente para que se fusionen primero las piezas
+vecinas. En un diseño de 133 contornos esto baja de mas de 80 s a menos de
+1 s sin alterar la operacion booleana. El resultado debe cumplir:
 
 - ninguna arista interna repetida;
 - ningun offset global;
@@ -426,6 +433,15 @@ para exportaciones de Corel agrupa unicamente entidades consecutivas con el
 mismo layer/color y contencion Clipper mayor o igual a `99.9%`. Cada raiz
 disjunta conserva su propio objeto de material.
 
+El indice de color ACI no es decorativo: es la mitad de esa identidad de
+estilo. La tabla ACI debe cubrir `1..255` completa. Con una tabla parcial,
+todo indice ausente cae al color de la capa, entidades de colores distintos
+quedan en una sola tirada de estilo y objetos independientes se fusionan en
+un unico compuesto par/impar; sus interiores terminan clasificados como
+vacios. En `Cataratas.dxf` eso convertia 44 piezas en agujeros y las volvia
+no seleccionables. Con la paleta completa, DXF y SVG detectan el mismo unico
+hueco real, que es el invariante de equivalencia entre formatos.
+
 Esta reconstruccion alimenta solo `applyMaterialVoids()`. La salida visible
 sigue viniendo de `buildDXFPaintItems()`. Si un DXF ajeno a Corel necesita
 semantica inequívoca de relleno, debe preferirse SVG o incorporar HATCH/loops
@@ -448,3 +464,49 @@ La regresion debe exigir, en SVG y DXF:
 3. cero vacios visibles, listados, seleccionados o extruidos como pieza;
 4. exactamente un vacio incluido en `_holeIdxs`;
 5. mallas manifold y laminado real correcto en Bambu Studio.
+
+## 13. Frontera coincidente, contorno cubierto y triangulo fino
+
+Desde `v1.0.10`, tres reglas cierran el flujo "seleccionar todo y extruir"
+sobre disenos por capas densos. Las tres nacen del mismo modelo de la
+seccion 1: una frontera puede cumplir dos roles y una pieza puede quedar
+completamente tapada por las piezas que lleva encima.
+
+**Un anillo hijo con la misma area que su padre no es un hueco.** Es la
+misma frontera vista desde el otro lado. Restarlo no deja un agujero: deja
+la pieza sin material y la union 2D sin solido. `enclosesInterior()` exige
+que el hijo sea estrictamente mas chico antes de aceptarlo como hueco, tanto
+al armar el flat mesh como al absorber hijos y al restar interiores
+seleccionados.
+
+**Un contorno cuyos hijos seleccionados cubren todo su interior no es un
+error.** No aporta material propio; lo aporta cada hijo como pieza. Se
+descarta ese contorno y se informa en el toast, en vez de lanzar y abortar
+la extrusion entera. Solo se descarta cuando el contorno no absorbio nada:
+si absorbio huecos o islas, un area nula significa otra cosa y debe seguir
+siendo un error visible.
+
+**Descartar un triangulo abre sus aristas.** El filtro de degenerados solo
+puede cubrir el caso colineal exacto. La grilla canonica de Clipper es de
+`1e-4 mm`, asi que una cara legitima puede tener `1e-8 mm2`; el umbral
+anterior de `area2 < 1e-12` borraba cada tira delgada de un diseno con
+muchas curvas y dejaba la malla abierta al exportar.
+
+### Fixture de diseno por capas
+
+`Modelos/Cataratas.dxf` y `Modelos/Cataratas.svg` son el fixture denso: 5
+colores, ~130 regiones visibles, un unico hueco real (la argolla). El Tucan
+no ejercita ni la cantidad de objetos del mismo color ni la extrusion de
+todo el modelo. La regresion exige sobre ambos formatos:
+
+1. exactamente un vacio real y todo contorno con material seleccionable;
+2. al menos 4 colores conservados;
+3. "seleccionar todo + extruir" produce piezas en los dos modos, sin abortar
+   y por debajo de un presupuesto de tiempo amplio (mide que la union sea
+   sub-cuadratica, no la velocidad de la maquina);
+4. en modo unido: una sola pieza y contrato 3MF completo.
+
+El contrato 3MF se exige sobre el solido canonico del modo unido. En modo
+separado, el contorno base de este diseno se extruye con ~60 huecos
+seleccionados y todavia produce una malla abierta: es un defecto anterior,
+no se congela como resuelto.

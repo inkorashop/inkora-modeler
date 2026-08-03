@@ -3,6 +3,113 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 - Diseno por capas denso: colores ACI, vacios falsos, union unida y marquee
+
+Reportado sobre `Modelos/Cataratas.dxf` / `.svg` (5 colores, ~130 regiones,
+un solo hueco real: la argolla).
+
+### Causa raiz comun: la tabla ACI estaba incompleta
+
+`aciToHex()` solo conocia ~26 indices (1-9, algunos multiplos de 20, 250-255).
+Cataratas usa 7, 28, 97 y 134: tres de los cuatro caian a `null`, se resolvian
+por color de capa y **todas** las entidades terminaban en `#ffffff`.
+
+Como `dxfPaintStyleKey()` es `layer|color`, eso dejaba las 79 entidades en una
+sola tirada de estilo. `buildDXFMaterialItems()` armo entonces un unico objeto
+compuesto con 69 anillos y, por paridad, marco 44 piezas internas como vacio.
+Un vacio no es seleccionable ni listable (v1.0.9, seccion 12 del pipeline): de
+ahi que "seleccionar todo" dejara huecos y que tampoco se pudieran seleccionar
+a mano. El SVG no sufria nada porque trae `fill-rule` y clases CSS reales.
+
+Medicion antes/despues, mismo archivo:
+
+| | contornos | vacios | seleccionables | colores |
+| --- | ---: | ---: | ---: | ---: |
+| DXF antes | 120 | 45 | 75 | 1 |
+| DXF ahora | 119 | 1 | 118 | 4 |
+| SVG | 134 | 1 | 133 | 4 |
+
+Fix: generar la paleta ACI `10..249` completa con el modelo documentado de
+AutoCAD (24 tonos x 10 niveles) y conservar explicitos `1..9` y `250..255`.
+No se toco la inferencia de compuestos: con colores correctos ya distingue
+bien los objetos.
+
+### Extrusion unida: 80 s o crash -> menos de 1 s
+
+`Solid2D.unionShapes()` acumulaba linealmente: un `Execute` de Clipper por
+shape, cada uno reprocesando todo el acumulado. Con 133 contornos eso es
+`O(N * M)`. Medido: 80.023 ms de los 80.337 ms totales de la extrusion.
+En el DXF (con los 45 vacios falsos) directamente abortaba a los 260 s con
+`No se pudo regularizar el contacto puntual del hueco`.
+
+Fix: union por pares en arbol, con las hojas ordenadas espacialmente. Cada
+`Execute` sigue viendo dos regiones ya consolidadas — nunca una carga masiva
+de contornos crudos, que era el motivo real de no hacer la union de golpe —
+pero el resultado parcial se reprocesa `log2(N)` veces en vez de `N`.
+
+| | antes | ahora |
+| --- | ---: | ---: |
+| Cataratas SVG unido | 88.159 ms | 464 ms |
+| Cataratas DXF unido | aborta a los 260 s | 234 ms |
+| Tucan DXF/SVG unido | igual malla | igual malla |
+
+### Marquee: caja del mundo en vez de silueta proyectada
+
+El rectangulo probaba "100% adentro" contra las ocho esquinas de un `Box3`
+del mundo. Es un envolvente alineado a los ejes del modelo: para una forma
+diagonal, curva o vista en perspectiva sobresale de la silueta dibujada y
+descarta piezas que el usuario ve completamente cubiertas. Ahora se proyectan
+los vertices reales de la geometria del propio mesh (los hijos de una pieza
+son decorativos o de picking). Ademas, un marquee vacio deselecciona y
+refresca el panel en vez de salir dejando el badge anterior.
+
+### Pegar un archivo DXF/SVG desde el portapapeles
+
+`Ctrl+C` sobre el archivo en el explorador y `Ctrl+V` en la app: el archivo
+llega en `clipboardData.files`, no como texto. Se resuelve con el mismo
+`loadDXF()` del boton Importar, asi conserva el encoding latin1 del DXF y el
+nombre del archivo como nombre de proyecto. El pegado de texto DXF/SVG (macro
+de Corel) sigue igual.
+
+### Tres defectos previos que bloqueaban "seleccionar todo y extruir"
+
+Aparecieron al quedar habilitado el flujo completo. Los tres estaban desde
+antes de estos cambios (verificado corriendo el HTML de `HEAD`):
+
+1. **Anillo hijo coincidente tratado como hueco.** En el Tucan DXF, el
+   contorno 14 es el gemelo exacto del 0 con winding opuesto. Restarlo dejaba
+   la pieza sin material y la extrusion entera abortaba con cero piezas.
+   `enclosesInterior()` exige ahora que el hijo sea estrictamente mas chico.
+   Tucan DXF separado: 0 piezas -> 16. Tucan SVG separado: 2 -> 18.
+2. **Contorno cubierto por sus hijos seleccionados.** Con "seleccionar todo",
+   los hijos pueden tapar exactamente todo el interior del padre. Eso no es un
+   error: el padre no aporta material propio. Se descarta e informa en el
+   toast, en vez de lanzar. Cataratas DXF separado: 5 piezas -> 116.
+3. **Umbral de triangulo degenerado demasiado alto.** `cleanMeshTriangles()`
+   descartaba triangulos con `area2 < 1e-12`, o sea area menor a `5e-7 mm2`.
+   La grilla canonica de Clipper es de `1e-4 mm`, asi que borraba caras finas
+   legitimas y abria la malla: el 3MF unido de Cataratas SVG fallaba con 38
+   aristas abiertas (tambien en `HEAD`). Baja a `1e-24`, que solo cubre el
+   colineal exacto. Export unido: falla -> 457 KB validos.
+
+### Queda abierto
+
+En modo separado, el contorno base de Cataratas DXF se extruye con ~60 huecos
+seleccionados y produce una malla con aristas compartidas por mas de dos caras
+(798) ademas de abiertas (40). El 3MF de esa pieza no exporta. Es anterior a
+estos cambios y no se resolvio; la regresion exige el contrato 3MF sobre el
+solido canonico del modo unido y deja el caso separado documentado en vez de
+congelarlo como correcto.
+
+### Regresion
+
+`electron/tests/geometry-regression.js` incorpora `Cataratas.dxf` y
+`Cataratas.svg` como fixture de diseno por capas: paridad de vacios entre
+formatos, contornos seleccionables, colores conservados, "seleccionar todo +
+extruir" en ambos modos con presupuesto de tiempo, y contrato 3MF en modo
+unido. El resto de la suite (incluido el laminado real en Bambu Studio) sigue
+en verde. Version HTML/Electron: `1.0.10`.
+
 ## 2026-08-02 - Distribucion local estandarizada
 
 El proyecto adopta de forma explicita el estandar optativo de

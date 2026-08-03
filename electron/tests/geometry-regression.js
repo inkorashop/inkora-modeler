@@ -24,6 +24,11 @@ const repoRoot = path.resolve(__dirname, '..', '..');
 const htmlPath = path.join(repoRoot, 'inkora-3d-modeler-v10-corregido.html');
 const dxfText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Tucan.dxf'), 'latin1');
 const svgText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Tucan.svg'), 'utf8');
+// Diseño por capas denso (5 colores, ~130 regiones visibles). Cubre el caso
+// que el Tucan no ejercita: muchos objetos del mismo color, un unico hueco
+// real y "seleccionar todo + extruir" sobre todo el modelo.
+const layeredDxfText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Cataratas.dxf'), 'latin1');
+const layeredSvgText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Cataratas.svg'), 'utf8');
 
 async function waitForGeometryRuntime(win) {
   const deadline = Date.now() + 30000;
@@ -41,6 +46,8 @@ async function collectMetrics(win) {
   return win.webContents.executeJavaScript(`(async () => {
     const dxfText = ${JSON.stringify(dxfText)};
     const svgText = ${JSON.stringify(svgText)};
+    const layeredDxfText = ${JSON.stringify(layeredDxfText)};
+    const layeredSvgText = ${JSON.stringify(layeredSvgText)};
 
     function polygonArea(points) {
       let area = 0;
@@ -946,6 +953,65 @@ async function collectMetrics(win) {
       };
     }
 
+    /* Diseño por capas denso: verifica que DXF y SVG lleguen a la misma
+       semantica de vacios (un unico hueco real), que todo contorno con
+       material quede seleccionable, y que "seleccionar todo + extruir"
+       termine en las dos modalidades sin abortar y en tiempo razonable.
+       Antes de este caso, el DXF clasificaba decenas de piezas internas
+       como vacios y la extrusion unida podia tardar minutos o abortar. */
+    async function testLayeredArtwork(text, name, extension) {
+      await importThroughFileInput(text, name + extension);
+      const contours = State.contours.length;
+      const voids = State.contours.filter(contour => contour._isVoid).length;
+      const selectable = State.contours.filter(contour =>
+        Utils.isVisibleContour(contour)
+      ).length;
+      const colors = new Set(
+        State.contours.map(contour => contour.color).filter(Boolean)
+      ).size;
+
+      const modes = {};
+      for (const mode of ['separate', 'merged']) {
+        await importThroughFileInput(text, name + '-' + mode + extension);
+        PanelUI.selectAll();
+        State.extrudeMode = mode;
+        document.getElementById('ex-depth').value = '3';
+        document.getElementById('ex-bevel').value = '0';
+        PanelUI.updateButtons();
+        const started = performance.now();
+        document.getElementById('btn-extrude').click();
+        const elapsedMs = performance.now() - started;
+        const invalidMeshes = State.pieces.filter(piece => {
+          const positions = piece.mesh?.geometry?.attributes?.position;
+          return !positions || positions.count < 3 ||
+            !Number.isFinite(GeoModule.getPieceRealBox(piece).min.x);
+        }).length;
+        modes[mode] = {
+          elapsedMs: Math.round(elapsedMs),
+          pieces: State.pieces.length,
+          invalidMeshes,
+        };
+        // El contrato 3MF se exige sobre el solido canonico del modo unido.
+        // En modo separado, el contorno base de este diseño se extruye con
+        // ~60 huecos seleccionados y todavia produce una malla abierta: es un
+        // defecto anterior a la union por pares (ver DECISIONS.md) y no se
+        // congela aca como si estuviera resuelto.
+        if (mode !== 'merged') continue;
+        const generated = await Exporter.generate3MFBlob(State.pieces, name);
+        const zip = await JSZip.loadAsync(generated.blob);
+        const modelFile = Object.keys(zip.files)
+          .find(filename => /3dmodel\\.model$/i.test(filename));
+        const model = inspect3MFModel(await zip.file(modelFile).async('string'));
+        Object.assign(modes[mode], {
+          failedExports: generated.failedCount,
+          nonManifoldEdges: model.nonManifoldEdges,
+          inconsistentWindingEdges: model.inconsistentWindingEdges,
+          nonPositiveVolumes: model.nonPositiveVolumes,
+        });
+      }
+      return { contours, voids, selectable, colors, modes };
+    }
+
     async function testFullFlow(parser, text, name) {
       const shapeData = await parser.loadText(text);
       const coincidentBoundaryPairs = countCoincidentBounds(shapeData);
@@ -1191,6 +1257,8 @@ async function collectMetrics(win) {
       materialVoids: await testMaterialVoidDetection(),
       dxf: summarize(await DXFParser.loadText(dxfText)),
       svg: summarize(await SVGParser.loadText(svgText)),
+      layeredDxf: await testLayeredArtwork(layeredDxfText, 'cataratas-dxf', '.dxf'),
+      layeredSvg: await testLayeredArtwork(layeredSvgText, 'cataratas-svg', '.svg'),
       dxfFlow: await testFullFlow(DXFParser, dxfText, 'tucan-dxf-test'),
       svgFlow: await testFullFlow(SVGParser, svgText, 'tucan-svg-test'),
       beveled3MF: await testBeveled3MFFlow(),
@@ -1403,6 +1471,45 @@ function validate(metrics) {
   }
   if (metrics.dxf.colorCount < 3) failures.push(`DXF conserva solo ${metrics.dxf.colorCount} colores`);
   if (metrics.svg.colorCount < 4) failures.push(`SVG conserva solo ${metrics.svg.colorCount} colores`);
+  for (const format of ['Dxf', 'Svg']) {
+    const layered = metrics[`layered${format}`];
+    const label = format.toUpperCase();
+    if (layered.voids !== 1) {
+      failures.push(`${label} por capas: ${layered.voids} vacios en vez del unico hueco real`);
+    }
+    if (layered.selectable !== layered.contours - layered.voids) {
+      failures.push(
+        `${label} por capas: solo ${layered.selectable} de ${layered.contours - layered.voids} contornos con material son seleccionables`
+      );
+    }
+    if (layered.colors < 4) {
+      failures.push(`${label} por capas: conserva solo ${layered.colors} colores`);
+    }
+    for (const [mode, run] of Object.entries(layered.modes)) {
+      if (!run.pieces) {
+        failures.push(`${label} por capas (${mode}): seleccionar todo y extruir no produjo piezas`);
+      }
+      if (run.invalidMeshes) {
+        failures.push(`${label} por capas (${mode}): ${run.invalidMeshes} mallas invalidas`);
+      }
+      if (mode === 'merged' &&
+          (run.failedExports || run.nonManifoldEdges ||
+           run.inconsistentWindingEdges || run.nonPositiveVolumes)) {
+        failures.push(
+          `${label} por capas (${mode}): 3MF con ${run.failedExports} exportaciones fallidas, ${run.nonManifoldEdges} aristas no manifold, ${run.inconsistentWindingEdges} de winding y ${run.nonPositiveVolumes} volumenes no positivos`
+        );
+      }
+      // Presupuesto amplio a proposito: mide que la union sea sub-cuadratica,
+      // no la velocidad exacta de la maquina. Antes de la union por pares
+      // este mismo modelo tardaba mas de 80 s o abortaba.
+      if (run.elapsedMs > 15000) {
+        failures.push(`${label} por capas (${mode}): la extrusion tardo ${run.elapsedMs} ms`);
+      }
+    }
+    if (layered.modes.merged.pieces !== 1) {
+      failures.push(`${label} por capas: el modo unido produjo ${layered.modes.merged.pieces} piezas`);
+    }
+  }
   for (const format of ['dxf', 'svg']) {
     const flow = metrics[`${format}Flow`];
     const parsed = metrics[format];
