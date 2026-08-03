@@ -3,6 +3,59 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento 2) - Color visible, contraste de contorno y controles de la barra
+
+### El swatch mostraba el hex crudo, no el color que se ve
+
+Entre el color de un material y el pixel en pantalla hay tres etapas: las
+luces (incluida la iluminacion por entorno de `buildStudioEnvironment`), el
+tone mapping ACES y la codificacion sRGB de salida. El panel pintaba el hex
+crudo, asi que la muestra se veia mucho mas oscura que la pieza.
+
+No se replico esa cadena con una formula: con IBL y ACES cualquier formula
+queda desactualizada apenas cambien las luces. Se **mide**. `Viewport.
+shadedColor()` renderiza un fragmento de superficie con el mismo renderer,
+el mismo entorno, las mismas luces y el mismo material, y lee el pixel. La
+sonda mira desde la misma direccion que la camara por defecto: medir en
+picado daba un color ~17% mas claro, porque con `roughness 0.55` el angulo
+de vista cambia el brillo. El resultado se cachea por color.
+
+Distancia euclidea entre la muestra del panel y el pixel real de la pieza:
+
+| color | antes | ahora |
+| --- | ---: | ---: |
+| `#c8763c` | 177 | 19 |
+| `#8b2f10` | 213 | 13 |
+| `#204080` | 215 | 17 |
+| `#f0e6d0` | 24 | 21 |
+
+El residuo es la orientacion exacta de la cara y la posicion de camara del
+momento. El color que se exporta al 3MF y al MTL sigue siendo el hex crudo:
+lo medido es solo para mostrar.
+
+### Contorno con contraste dinamico
+
+Las lineas de contorno de una pieza 3D estaban fijas en `0x222222`. Pero no
+compiten contra el fondo del viewport sino contra la propia pieza, que puede
+tener cualquier color. `Utils.contrastingLineColor()` elige claro u oscuro
+por luminancia del color **visible** (no del hex crudo), y se reevalua al
+extruir, al refrescar la seleccion y al cambiar el color de una pieza. Una
+pieza negra pasa a `#262d37` visible y recibe linea clara; el resto de la
+paleta se ve claro con esta iluminacion y recibe linea oscura.
+
+### Controles de la barra
+
+- **Separacion al exportar**: el interruptor y el campo de mm eran dos
+  controles pegados. Ahora son uno solo: el borde vive en el contenedor, el
+  icono alterna y el valor se edita en el lugar. Apagado se atenua entero
+  pero el valor sigue visible, porque es el que se va a usar al encenderlo.
+- **Abrir en laminador**: estaba oculto con `display:none` fuera de Electron,
+  asi que en el HTML suelto o en la web la funcion parecia no existir. Ahora
+  se muestra siempre, deshabilitado y con el motivo en el tooltip. Lanzar una
+  aplicacion instalada sigue siendo posible solo desde la app de escritorio.
+
+Version HTML/Electron: `1.0.12`.
+
 ## 2026-08-03 (seguimiento) - Exportacion OBJ, presets de exportacion y seleccion tras extruir
 
 ### Por que OBJ

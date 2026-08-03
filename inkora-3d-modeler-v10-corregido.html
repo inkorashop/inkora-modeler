@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.11">
+<meta name="inkora-version" content="1.0.12">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
@@ -155,34 +155,41 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .btn.danger{border-color:rgba(255,79,79,.4);color:var(--danger);background:transparent}
 .btn.danger:hover{background:rgba(255,79,79,.08);border-color:var(--danger)}
 .export-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}
-.export-gap-control{display:flex;align-items:center;gap:2px;flex-shrink:0}
-.export-gap-toggle{
-  width:28px;min-width:28px;justify-content:center;padding-left:0;padding-right:0;
-  color:var(--text-faint);
-}
-.export-gap-toggle svg{width:11px;height:11px;flex-shrink:0}
-.export-gap-toggle[aria-checked="true"]{
-  color:var(--accent);border-color:var(--accent);
-  background:var(--accent-dim);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.08);
-}
-.export-gap-value-wrap{
-  height:27px;display:flex;align-items:center;gap:3px;padding:0 6px;
+/* Separacion al exportar: un solo control. El borde vive en el contenedor,
+   no en cada parte, para que el interruptor y el valor se lean como una
+   sola cosa. Apagado se atenua entero pero el valor sigue visible: es el
+   que se va a usar al encenderlo. */
+.export-gap-control{
+  height:27px;display:flex;align-items:center;gap:4px;flex-shrink:0;
+  padding:0 7px 0 4px;
   border:1px solid var(--border);border-radius:var(--r);background:transparent;
   color:var(--text-faint);transition:border-color .15s,color .15s,opacity .15s;
 }
-.export-gap-control[data-enabled="false"] .export-gap-value-wrap{opacity:.52}
-.export-gap-value-wrap:focus-within{
-  color:var(--text-dim);border-color:var(--accent);
-  box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18);
+.export-gap-control[data-enabled="false"]{opacity:.55}
+.export-gap-control[data-enabled="true"]{
+  color:var(--accent);border-color:var(--accent);background:var(--accent-dim);
 }
+.export-gap-control:focus-within{
+  border-color:var(--accent);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.18);
+}
+.export-gap-toggle{
+  width:19px;height:19px;flex-shrink:0;padding:0;border:0;border-radius:3px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;color:inherit;cursor:pointer;transition:background .12s;
+}
+.export-gap-toggle:hover{background:rgba(var(--accent-rgb),.14)}
+.export-gap-toggle:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
+.export-gap-toggle svg{width:11px;height:11px;display:block}
 .export-gap-value{
   width:43px;padding:0;border:0;outline:0;background:transparent;color:var(--text);
   font-family:var(--mono);font-size:9px;text-align:right;letter-spacing:0;
 }
+.export-gap-control[data-enabled="false"] .export-gap-value{color:var(--text-faint)}
 .export-gap-value::selection{background:rgba(var(--accent-rgb),.3)}
 .export-gap-unit{font-size:8px;color:inherit;user-select:none}
-.export-gap-value-wrap:has(.export-gap-value[aria-invalid="true"]){
-  border-color:var(--danger);box-shadow:0 0 0 2px rgba(255,79,79,.12);
+.export-gap-control:has(.export-gap-value[aria-invalid="true"]){
+  border-color:var(--danger);color:var(--danger);
+  box-shadow:0 0 0 2px rgba(255,79,79,.12);
 }
 
 /* ── Undo / Redo ── */
@@ -558,8 +565,11 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 }
 .split-btn>.split-caret svg{width:9px;height:9px;display:block;transition:transform .12s}
 .split-btn>.split-caret[aria-expanded="true"] svg{transform:rotate(180deg)}
-#slicer-wrap{position:relative;display:none}
-#slicer-wrap.electron-ready{display:inline-flex}
+/* El control se muestra siempre. Abrir una aplicacion instalada solo es
+   posible desde la app de escritorio, pero esconderlo fuera de ahi hacia
+   que la funcion pareciera no existir: queda visible y deshabilitado, con
+   el motivo en el tooltip. */
+#slicer-wrap{position:relative;display:inline-flex}
 #slicer-panel,#export-format-panel{
   position:fixed;top:0;left:0;width:224px;
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
@@ -682,7 +692,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.11</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.12</span></div>
     <div class="sep"></div>
     <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -736,21 +746,19 @@ html.light{
           <svg class="slicer-check" width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true"><path d="M2 5.6 4.3 8 9 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
       </div>
-      <div class="export-gap-control" id="export-gap-control" data-enabled="false">
-        <button class="btn export-gap-toggle" id="btn-export-gap" type="button" role="switch"
+      <div class="export-gap-control" id="export-gap-control" data-enabled="false"
+           title="Separacion entre piezas al exportar">
+        <button class="export-gap-toggle" id="btn-export-gap" type="button" role="switch"
                 aria-checked="false" aria-controls="export-gap-value"
-                aria-label="Separacion entre piezas al exportar"
+                aria-label="Activar separacion entre piezas al exportar"
                 title="Separacion entre piezas al exportar: desactivada">
           <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2 1.5 6l3 4M7.5 2l3 4-3 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <label class="export-gap-value-wrap" for="export-gap-value"
-               title="Distancia vacia entre piezas en el 3MF exportado">
-          <input class="export-gap-value" id="export-gap-value" type="text"
-                 inputmode="decimal" autocomplete="off" spellcheck="false"
-                 value="0,001" aria-label="Separacion entre piezas en milimetros"
-                 aria-describedby="export-gap-unit" aria-invalid="false">
-          <span class="export-gap-unit" id="export-gap-unit">mm</span>
-        </label>
+        <input class="export-gap-value" id="export-gap-value" type="text"
+               inputmode="decimal" autocomplete="off" spellcheck="false"
+               value="0,001" aria-label="Separacion entre piezas en milimetros"
+               aria-describedby="export-gap-unit" aria-invalid="false">
+        <span class="export-gap-unit" id="export-gap-unit">mm</span>
       </div>
     </div>
     <div id="slicer-wrap">
@@ -902,7 +910,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.11').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.12').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -976,6 +984,14 @@ const Utils = (() => {
     const c = new THREE.Color(hexColor);
     return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
   }
+  /* Color de linea que contrasta contra una superficie. El contorno de una
+     pieza 3D no compite contra el fondo del viewport sino contra la propia
+     pieza, y esa pieza puede tener cualquier color: un gris fijo desaparece
+     sobre un naranja medio y un negro fijo desaparece sobre uno oscuro.
+     Se elige por luminancia de lo que realmente se ve, no del hex crudo. */
+  function contrastingLineColor(surfaceHex) {
+    return relativeLuminance(surfaceHex) > 0.5 ? '#101018' : '#f2f4ff';
+  }
   // Solución general: cualquier color EXPLÍCITO (no solo "sin color") puede
   // no tener contraste contra el viewport activo — el caso real que rompió
   // esto fue un DXF con color blanco ACI-7 (el "color por defecto" típico
@@ -1015,7 +1031,7 @@ const Utils = (() => {
     }
     return inside;
   }
-  return { toast, palette, isVisibleContour, isPanelContour, parseDecimal, clamp, pointInPolygon, defaultContourColor, selectedContourColor, resolveLegacyColor, contourDisplayColor };
+  return { toast, palette, isVisibleContour, isPanelContour, parseDecimal, clamp, pointInPolygon, defaultContourColor, selectedContourColor, resolveLegacyColor, contourDisplayColor, contrastingLineColor, relativeLuminance };
 })();
 
 
@@ -3663,6 +3679,75 @@ const Viewport = (() => {
   // Almacena la animación en curso (null si no hay ninguna)
   let _focusAnim = null;
 
+  /* ── shadedColor ───────────────────────────────────────────────────────
+     Color de una pieza TAL COMO SE VE, no el hex crudo de su material.
+     Entre uno y otro hay tres etapas que no se pueden ignorar: las luces
+     (incluida la iluminacion por entorno de buildStudioEnvironment), el
+     tone mapping ACES y la codificacion sRGB de salida. Por eso el swatch
+     del panel se veia bastante mas oscuro que la pieza en el viewport.
+
+     No se replica esa cadena con una formula: se mide. Se renderiza un
+     fragmento de superficie con el mismo renderer, el mismo entorno, las
+     mismas luces y el mismo material, y se lee el pixel. Asi el resultado
+     sigue siendo correcto si manana cambian las luces o la exposicion.
+
+     Se usa una cara orientada hacia arriba porque es la que domina la
+     lectura visual de una pieza extruida y no depende de la camara.
+  ─────────────────────────────────────────────────────────────────────── */
+  let _probe = null;
+  const _shadedCache = new Map();
+
+  function buildProbe() {
+    const probeScene = new THREE.Scene();
+    probeScene.environment = scene.environment;
+    scene.children.forEach(child => {
+      if (child.isLight) probeScene.add(child.clone());
+    });
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff, metalness: 0.1, roughness: 0.55, side: THREE.FrontSide,
+    });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    plane.rotation.x = -Math.PI / 2;   // normal hacia +Y, como una cara superior
+    probeScene.add(plane);
+    // La sonda mira desde la misma direccion que la camara por defecto y no
+    // en picado: con roughness 0.55 e iluminacion por entorno, el angulo de
+    // vista cambia bastante el brillo. Medir de frente daba un color ~17%
+    // mas claro que el que realmente se ve.
+    const probeCamera = new THREE.OrthographicCamera(-0.5, 0.5, 0.5, -0.5, 0.1, 10);
+    probeCamera.position.copy(
+      new THREE.Vector3(0, 80, 140).normalize().multiplyScalar(3)
+    );
+    probeCamera.lookAt(0, 0, 0);
+    const target = new THREE.WebGLRenderTarget(1, 1);
+    // Mismo encoding que la salida a pantalla: sin esto el pixel vuelve en
+    // espacio lineal y el color medido queda mas oscuro que el visible.
+    target.texture.encoding = renderer.outputEncoding;
+    return { scene: probeScene, camera: probeCamera, material, target, buffer: new Uint8Array(4) };
+  }
+
+  function shadedColor(hex) {
+    const key = String(hex || '').toLowerCase();
+    if (_shadedCache.has(key)) return _shadedCache.get(key);
+    let result = key;
+    try {
+      if (!_probe) _probe = buildProbe();
+      _probe.material.color.set(hex);
+      const previousTarget = renderer.getRenderTarget();
+      renderer.setRenderTarget(_probe.target);
+      renderer.render(_probe.scene, _probe.camera);
+      renderer.readRenderTargetPixels(_probe.target, 0, 0, 1, 1, _probe.buffer);
+      renderer.setRenderTarget(previousTarget);
+      const [r, g, b] = _probe.buffer;
+      result = '#' + [r, g, b]
+        .map(channel => channel.toString(16).padStart(2, '0')).join('');
+    } catch (err) {
+      // Sin WebGL disponible el color crudo sigue siendo una respuesta util.
+      console.warn('No se pudo medir el color renderizado.', err);
+    }
+    _shadedCache.set(key, result);
+    return result;
+  }
+
   function onClickMesh(cb){_onClickMesh=cb;}
   function onHoverMesh(cb){_onHoverMesh=cb;}
   function getScene(){return scene;}
@@ -3812,7 +3897,7 @@ const Viewport = (() => {
 
   return {
     init,add2D,clear2D,add3D,remove2D,remove3D,clearAll,focusAll,
-    setEmissive,clearEmissive,onClickMesh,onHoverMesh,getScene,getCamera,getRenderer,
+    setEmissive,clearEmissive,onClickMesh,onHoverMesh,getScene,getCamera,getRenderer,shadedColor,
     getNavigationState,restoreNavigationState,updateInteractionMatrices,
     group2D:()=>group2D, group3D:()=>group3D,
     applyHighlight: _applyHighlight,
@@ -3943,8 +4028,12 @@ const GeoModule = (() => {
     // En espacio LOCAL del mesh, la cara superior siempre está en Z = absDepth
     // (independientemente de si la extrusión es positiva o negativa, porque
     //  la geometría siempre va de 0 a absDepth en Z local antes de rotar).
+    // El contorno compite contra la propia pieza, no contra el fondo: se
+    // elige por la luminancia del color tal como se ve en el viewport.
     const outlineMat = new THREE.LineBasicMaterial({
-      color: 0x222222,
+      color: new THREE.Color(
+        Utils.contrastingLineColor(Viewport.shadedColor(color))
+      ),
       depthTest: true,
       depthWrite: false,
       polygonOffset: true,
@@ -5389,7 +5478,16 @@ const PanelUI = (() => {
       const selectedFace = State.selectedFaces.get(idx) || 'top';
       const lineFace = o.userData._pickFace || 'top';
       const selected = State.selectedIdxs.has(idx) && selectedFace === lineFace;
-      o.material.color.set(selected ? 0xffffff : 0x222222);
+      // Sin seleccionar, la linea contrasta contra su propia pieza; el color
+      // sale del mesh que la contiene y no de una constante.
+      const surface = o.parent?.material?.color
+        ? `#${o.parent.material.color.getHexString()}`
+        : '#c8c8d0';
+      o.material.color.set(
+        selected
+          ? Utils.selectedContourColor()
+          : Utils.contrastingLineColor(Viewport.shadedColor(surface))
+      );
       o.material.opacity = selected ? 1 : 0.95;
       o.material.depthTest = !selected;
       o.renderOrder = selected ? 10002 : 10000;
@@ -5676,9 +5774,13 @@ const PanelUI = (() => {
     if (wantSel3D    !== item.classList.contains('sel-3d'))   item.classList.toggle('sel-3d', wantSel3D);
     if (wantExtruded !== item.classList.contains('extruded')) item.classList.toggle('extruded', wantExtruded);
 
-    // Swatch color
+    // Swatch: para una pieza 3D se muestra el color tal como se ve en el
+    // viewport (luces + tone mapping), no el hex crudo del material — si no,
+    // la muestra queda notoriamente mas oscura que la pieza.
     const swatch = item.querySelector('.p-swatch');
-    const wantBg = c.extruded ? (c.piece?.color || '#c8c8d0') : (c.sel2D ? SEL : (c.color || NEUTRAL));
+    const wantBg = c.extruded
+      ? Viewport.shadedColor(c.piece?.color || '#c8c8d0')
+      : (c.sel2D ? SEL : (c.color || NEUTRAL));
     if (swatch && swatch.style.background !== wantBg) swatch.style.background = wantBg;
 
     // Sincronizar valor del color input inline y mostrar/ocultar según tipo
@@ -5775,7 +5877,8 @@ const PanelUI = (() => {
     document.getElementById('btn-extrude').disabled = !has2D && !has3D;
     document.getElementById('btn-export').disabled=!State.pieces.length;
     const slicerBtn = document.getElementById('btn-slicer');
-    if (slicerBtn) slicerBtn.disabled=!State.pieces.length;
+    // Fuera de la app de escritorio el boton se ve pero nunca se habilita.
+    if (slicerBtn) slicerBtn.disabled=!State.pieces.length||!window.inkoraSlicer;
     document.getElementById('btn-clear').disabled=!State.contours.length;
     document.getElementById('btn-save-project').disabled=!State.contours.length;
   }
@@ -5858,6 +5961,12 @@ const PanelUI = (() => {
     targets.forEach(({ c }) => {
       c.piece.color = hex;
       c.piece.mesh.material.color.set(hex);
+      // Los contornos de la pieza se releen contra el color nuevo: si no,
+      // una pieza que pasa de oscura a clara se queda con lineas invisibles.
+      const lineColor = Utils.contrastingLineColor(Viewport.shadedColor(hex));
+      c.piece.mesh.children.forEach(child => {
+        if (child.isLine && child.material) child.material.color.set(lineColor);
+      });
       c.piece.mesh.userData._highlightOrigColor = new THREE.Color(hex).getHex();
       c.piece.mesh.material.emissive?.set(0x000000);
       c.piece.mesh.material.emissiveIntensity = 0;
@@ -9012,8 +9121,17 @@ const PanelUI = (() => {
     const caret = document.getElementById('btn-slicer-pick');
     const label = document.getElementById('slicer-label');
     const panel = document.getElementById('slicer-panel');
-    if (!wrap || !btn || !caret || !panel || !window.inkoraSlicer) return;
+    if (!wrap || !btn || !caret || !panel) return;
 
+    // Sin el puente de Electron el control se ve igual, pero no puede
+    // lanzar nada: queda inerte y el tooltip dice por que.
+    if (!window.inkoraSlicer) {
+      btn.disabled = true;
+      caret.disabled = true;
+      btn.title = 'Abrir en laminador requiere la app de escritorio de INKORA.';
+      caret.title = btn.title;
+      return;
+    }
     wrap.classList.add('electron-ready');
 
     const options = [...panel.querySelectorAll('[data-slicer]')]
