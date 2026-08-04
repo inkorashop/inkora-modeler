@@ -19,6 +19,111 @@
 <script src="vendor/SVGLoader.js"></script>
 <script src="vendor/clipper.js"></script>
 <script src="vendor/jszip.min.js"></script>
+<!-- ══ Respaldo por CDN ══════════════════════════════════════════════════
+     `vendor/` sigue siendo el camino principal: si esta al lado del HTML,
+     todo se resuelve local y esto no dispara ni una peticion. El respaldo
+     existe para el caso de llevarse SOLO el .html a otra PC, donde sin
+     estas cinco librerias la app no arranca y la pantalla queda en blanco
+     sin explicar por que.
+
+     Los archivos del CDN son byte-identicos a los de `vendor/` (mismo
+     sha256, verificado), y las URLs quedan clavadas a la version exacta
+     -- three r128, clipper 6.4.2, jszip 3.10.1 -- porque el codigo depende
+     de la API vieja de three (`examples/js`, no modulos). El `integrity`
+     hace que el navegador rechace el archivo si el CDN devuelve otra cosa.
+
+     Se carga con `document.write` a proposito: inserta los <script> en el
+     punto de parseo, asi mantienen el orden y bloquean igual que las
+     etiquetas de arriba. Con carga dinamica, el script principal correria
+     antes de que THREE exista.
+     ═════════════════════════════════════════════════════════════════════ -->
+<script>
+(function () {
+  var LIBS = {
+    three: {
+      url: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
+      sri: 'sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu'
+    },
+    bufferGeometryUtils: {
+      url: 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js',
+      sri: 'sha384-uODMim89BXiZh5nBix93duPujeInVvBbLHhqzNTebL4d10Kwpv21B1jYO9M3uOji'
+    },
+    svgLoader: {
+      url: 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/SVGLoader.js',
+      sri: 'sha384-Av6eYx7RvfMEB+se6igvzBsvIpIfWA2CAvt5RukoVSg/VHuc7I9ed4QM2SCOZn8J'
+    },
+    clipper: {
+      url: 'https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/clipper.js',
+      sri: 'sha384-oV9/r5hoq7qHFHfbghYwt50E2fe8J20vXRW0eIGQl20k40zMEAhSXMCh9ANASVB9'
+    },
+    jszip: {
+      url: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+      sri: 'sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG'
+    }
+  };
+
+  var missing = [];
+  // Sin THREE, SVGLoader y BufferGeometryUtils tampoco pudieron definirse:
+  // extienden clases de THREE al evaluarse, asi que fallan aunque sus
+  // archivos locales existan. Los tres van juntos.
+  if (!window.THREE) {
+    missing.push('three', 'bufferGeometryUtils', 'svgLoader');
+  } else {
+    if (!window.THREE.BufferGeometryUtils) missing.push('bufferGeometryUtils');
+    if (!window.THREE.SVGLoader)           missing.push('svgLoader');
+  }
+  if (!window.ClipperLib) missing.push('clipper');
+  if (!window.JSZip)      missing.push('jszip');
+
+  // Caso normal (vendor/ presente): no se pide nada por red.
+  window.inkoraVendorFallback = missing.slice();
+  if (!missing.length) return;
+
+  document.write(missing.map(function (key) {
+    var lib = LIBS[key];
+    return '<scr' + 'ipt src="' + lib.url + '" integrity="' + lib.sri +
+           '" crossorigin="anonymous"><\/scr' + 'ipt>';
+  }).join(''));
+})();
+</script>
+<!-- Si despues del respaldo sigue faltando algo (ni `vendor/` ni internet),
+     el script principal se rompe en la primera linea que toca THREE y la
+     pantalla queda vacia. Un cartel dice que pasa y como resolverlo, en vez
+     de dejar al usuario mirando una ventana en blanco. -->
+<script>
+(function () {
+  var faltan = [];
+  if (!window.THREE)                     faltan.push('three.min.js');
+  if (window.THREE && !window.THREE.BufferGeometryUtils) faltan.push('BufferGeometryUtils.js');
+  if (window.THREE && !window.THREE.SVGLoader)           faltan.push('SVGLoader.js');
+  if (!window.ClipperLib)                faltan.push('clipper.js');
+  if (!window.JSZip)                     faltan.push('jszip.min.js');
+  if (!faltan.length) return;
+
+  window.addEventListener('DOMContentLoaded', function () {
+    var box = document.createElement('div');
+    box.setAttribute('style', [
+      'position:fixed', 'inset:0', 'z-index:99999',
+      'background:#080b12', 'color:#c9d3e6',
+      'font-family:system-ui,Segoe UI,sans-serif', 'font-size:14px',
+      'line-height:1.7', 'display:flex', 'align-items:center',
+      'justify-content:center', 'text-align:center', 'padding:32px'
+    ].join(';'));
+    box.innerHTML =
+      '<div style="max-width:460px">' +
+      '<div style="font-size:30px;opacity:.3;margin-bottom:14px">◻</div>' +
+      '<div style="font-weight:600;margin-bottom:10px">Faltan las librerías</div>' +
+      '<div style="opacity:.75">No se pudieron cargar: ' +
+      faltan.join(', ') + '.</div>' +
+      '<div style="opacity:.75;margin-top:12px">Copiá la carpeta <b>vendor/</b> ' +
+      'junto a este archivo, o conectate a internet y recargá. ' +
+      'Si vas a usarlo en otra PC, lo más simple es llevar el ' +
+      '<b>.exe Portable</b>, que ya las trae adentro.</div>' +
+      '</div>';
+    document.body.appendChild(box);
+  });
+})();
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap');
 :root {

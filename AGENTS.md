@@ -69,5 +69,14 @@ regenerando la distribucion.
 
 Las librerias (three, SVGLoader, BufferGeometryUtils, Clipper, JSZip) viven
 en `vendor/` y se cargan con ruta relativa, para que la app funcione sin
-internet. No volver a apuntarlas a un CDN. Si se agrega una libreria, va a
-`vendor/` y tambien a `extraResources` en `electron/package.json`.
+internet. **`vendor/` es siempre el camino principal**: no reemplazarlo por
+un CDN. Si se agrega una libreria, va a `vendor/` y tambien a
+`extraResources` en `electron/package.json`.
+
+Desde el 2026-08-04 hay ademas un **respaldo por CDN** en el `<head>`, que
+solo dispara si una libreria no aparecio en `vendor/` -- el caso de llevarse
+suelto el `.html` a otra PC. Con `vendor/` presente no se pide nada por red.
+Las URLs estan clavadas a la version exacta y con `integrity`, y los
+archivos son byte-identicos a los de `vendor/`. Si se actualiza una libreria
+hay que actualizar las dos puntas: el archivo en `vendor/` y la URL + hash
+SRI del respaldo. Ver DECISIONS.md (2026-08-04).

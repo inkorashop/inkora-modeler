@@ -3,6 +3,77 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-04 (seguimiento) - Respaldo por CDN: el HTML suelto tambien arranca
+
+### Sintoma
+
+Se copio `INKORA 3D Modeler.html` solo a otra PC y la app no arrancaba. No
+era ninguna dependencia instalada en la PC de origen: el `<head>` carga cinco
+librerias con ruta relativa a `vendor/`, y sin esa carpeta al lado no existe
+THREE, ni Clipper, ni JSZip. El script principal se rompe en la primera linea
+que las toca y la ventana queda en blanco, sin decir por que.
+
+### Decision
+
+`vendor/` sigue siendo el camino principal -- la regla de AGENTS.md de no
+apuntar las librerias a un CDN no se revierte. Lo que se agrega es un
+**respaldo**: despues de las cinco etiquetas locales, un bloque comprueba
+`window.THREE`, `THREE.BufferGeometryUtils`, `THREE.SVGLoader`,
+`window.ClipperLib` y `window.JSZip`, y solo pide por red lo que falto.
+
+Con `vendor/` presente -- Electron, portable, instalador, Vercel -- el bloque
+sale en la primera comprobacion y no genera **ninguna** peticion. Verificado
+interceptando el trafico del renderer: cero pedidos externos.
+
+Sin THREE no se comprueban sus dos complementos por separado: `SVGLoader` y
+`BufferGeometryUtils` extienden clases de THREE al evaluarse, asi que si
+THREE falto ellos tampoco llegaron a definirse aunque sus archivos locales
+existan. Los tres se piden juntos.
+
+### Por que `document.write` y no carga dinamica
+
+El script principal es inline y corre durante el parseo, asi que las
+librerias tienen que estar listas antes. `document.write` inserta las
+etiquetas en el punto de parseo: mantienen el orden y bloquean igual que las
+locales. Con `appendChild` asincronico, el script principal correria primero
+y fallaria igual.
+
+Chromium avisa por consola que un script cross-site invocado por
+`document.write` **puede** bloquearse en conexiones muy lentas (la
+"document.write intervention", pensada para 2G). Es un aviso, no un error:
+en las pruebas los cinco archivos cargaron bien. Vale como limitacion
+conocida del respaldo, no del camino principal.
+
+### Versiones clavadas y verificadas
+
+Las URLs apuntan a la version exacta que hay en `vendor/` -- three r128
+(el codigo usa `examples/js`, no modulos), clipper 6.4.2, jszip 3.10.1 --
+y llevan `integrity` + `crossorigin`. Los cinco archivos que devuelven cdnjs
+y jsdelivr son **byte-identicos** a los de `vendor/` (mismo sha256), asi que
+el respaldo no introduce diferencias de comportamiento.
+
+Al actualizar una libreria hay que tocar las dos puntas: el archivo en
+`vendor/` y la URL + hash del respaldo.
+
+### Fallo explicito
+
+Si despues del respaldo sigue faltando algo -- ni `vendor/` ni internet --
+un cartel a pantalla completa dice cuales librerias faltaron y como
+resolverlo (copiar `vendor/` al lado, conectarse, o usar el `.exe` portable
+que ya las trae adentro). Antes ese caso era una ventana en blanco.
+
+### Verificacion
+
+Tres escenarios, cargando el HTML por `file://`:
+
+| escenario | resultado |
+| --- | --- |
+| con `vendor/` | 0 peticiones externas, THREE r128, app viva |
+| sin `vendor/`, con internet | las 5 desde CDN, THREE r128, app viva |
+| sin `vendor/`, sin internet | cartel de librerias faltantes |
+
+Regresion geometrica en verde.
+
 ## 2026-08-04 - Nombres de elemento, paleta con nombre y seleccion instantanea
 
 ### El panel ya no salta al seleccionar
