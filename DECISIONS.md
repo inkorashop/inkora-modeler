@@ -3,6 +3,57 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-03 (seguimiento 7) - Fuente canonica, librerias locales y distribucion obligatoria
+
+### `index.html`
+
+El fuente pasa de `inkora-3d-modeler-v10-corregido.html` a `index.html`.
+Tener version y "corregido" en el nombre de un archivo es residuo de cuando
+habia copias paralelas. Se eligio `index.html` y no `INKORA 3D Modeler.html`
+porque el mismo archivo se sirve por HTTP: con `index.html` Vercel lo entrega
+en `/` sin rewrite -- `vercel.json` se elimino -- y no hay espacios que
+URL-encodear. El nombre con espacios se conserva solo en la copia externa,
+que es para el usuario y no para una URL.
+
+### Librerias locales
+
+Las cinco librerias (three r128, SVGLoader, BufferGeometryUtils, Clipper,
+JSZip) venian de `cdnjs` y `jsdelivr`. Una app de escritorio que no arranca
+sin internet no es aceptable, y ademas ataba el arranque a que esos CDN no
+movieran una URL. Ahora viven en `vendor/` y se cargan con ruta relativa, que
+funciona igual desde `file://` en Electron y desde HTTP en Vercel.
+
+Verificado bloqueando **toda** la red del renderer:
+
+```text
+peticiones de red bloqueadas: 1 (solo Google Fonts)
+THREE, SVGLoader, BufferGeometryUtils, ClipperLib, JSZip: presentes
+importa 17 contornos, extruye 1 pieza, exporta 3MF (88 KB) y OBJ (39 KB)
+errores de consola: 0
+```
+
+Queda una sola dependencia externa: la tipografia de Google Fonts. Sin red
+cae al tipo de letra de respaldo y no rompe nada, pero para ser 100% offline
+habria que bajar los `woff2` y declarar `@font-face`.
+
+El paquete incluye `vendor/` via `extraResources`, y `build-local-distribution.
+ps1` la copia a la carpeta externa junto al HTML: sin esa carpeta al lado, la
+copia externa abre en blanco.
+
+### Regenerar la distribucion es parte de terminar
+
+`distribute:local` ya hacia todo en un comando, pero no estaba escrito que
+fuera obligatorio, y los `.exe` externos quedaron en `1.0.9` mientras el
+codigo iba por `1.0.16`. Ahora `AGENTS.md` lo declara como paso de cierre de
+tanda, con la tabla de que destino se actualiza por que via y la advertencia
+de que `main.js` y `preload.js` solo llegan al portable y al instalador por
+esta ruta.
+
+No se pide correrlo en cada commit intermedio: empaqueta dos veces y corre la
+regresion, son varios minutos.
+
+Version HTML/Electron: `1.0.17`.
+
 ## 2026-08-03 (seguimiento 6) - El preload nunca cargaba en la app de escritorio
 
 "Abrir en laminador" aparecia siempre deshabilitado dentro de la app, aun con

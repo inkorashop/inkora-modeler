@@ -8,6 +8,7 @@ INKORA 3D Modeler adopta el estandar optativo definido por
 ```text
 INKORA 3D Modeler/
 |-- Proyecto/
+|-- vendor/
 |-- INKORA 3D Modeler - Instalador.exe
 |-- INKORA 3D Modeler - Portable.exe
 |-- INKORA 3D Modeler.html
@@ -18,9 +19,10 @@ INKORA 3D Modeler/
 Electron, recursos, pruebas, macros y modelos de ejemplo. Los `.exe` externos,
 el HTML externo y el acceso directo son artefactos locales reproducibles.
 
-`INKORA 3D Modeler.html` es una copia estable del HTML vivo para abrirlo directo
-en el navegador. Esta salida externa se mantiene por pedido explicito del
-usuario; sigue dependiendo de las librerias CDN declaradas por el HTML fuente.
+`INKORA 3D Modeler.html` es una copia estable de `Proyecto/index.html` para
+abrirlo directo en el navegador. La carpeta `vendor/` externa acompana a esa
+copia: el HTML carga las librerias con ruta relativa, asi que sin ella el
+archivo abre en blanco. Ninguna de las dos se edita a mano.
 
 ## Comando unico
 

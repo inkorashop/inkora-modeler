@@ -21,7 +21,7 @@ if (typeof electronApi === 'string') {
 
 const { app, BrowserWindow } = electronApi;
 const repoRoot = path.resolve(__dirname, '..', '..');
-const htmlPath = path.join(repoRoot, 'inkora-3d-modeler-v10-corregido.html');
+const htmlPath = path.join(repoRoot, 'index.html');
 const dxfText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Tucan.dxf'), 'latin1');
 const svgText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Tucan.svg'), 'utf8');
 // Diseño por capas denso (5 colores, ~130 regiones visibles). Cubre el caso

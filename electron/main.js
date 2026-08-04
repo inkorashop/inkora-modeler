@@ -30,7 +30,7 @@ const appVersion = require('./package.json').version;
 // acceso directo local, cargar el HTML vivo del repo evita ejecutar una copia
 // empaquetada vieja. En una instalacion real sin .git cerca, se usa el HTML
 // empaquetado en resources/.
-const HTML_FILENAME = 'inkora-3d-modeler-v10-corregido.html';
+const HTML_FILENAME = 'index.html';
 const BUNDLED_HTML = path.join(process.resourcesPath, HTML_FILENAME);
 
 function findRepoHtmlNear(startDir) {

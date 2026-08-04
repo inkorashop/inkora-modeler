@@ -7,11 +7,15 @@ $electronRoot = Join-Path $projectRoot 'electron'
 $distRoot = Join-Path $electronRoot 'dist'
 $iconPath = Join-Path $electronRoot 'build\icon.ico'
 $developmentTarget = Join-Path $electronRoot 'node_modules\electron\dist\electron.exe'
-$htmlSource = Join-Path $projectRoot 'inkora-3d-modeler-v10-corregido.html'
+$htmlSource = Join-Path $projectRoot 'index.html'
+$vendorSource = Join-Path $projectRoot 'vendor'
 
 $installerDestination = Join-Path $outerRoot 'INKORA 3D Modeler - Instalador.exe'
 $portableDestination = Join-Path $outerRoot 'INKORA 3D Modeler - Portable.exe'
 $htmlDestination = Join-Path $outerRoot 'INKORA 3D Modeler.html'
+# El HTML carga las librerias desde vendor/ con ruta relativa: sin esta
+# carpeta al lado, el archivo externo abre en blanco.
+$vendorDestination = Join-Path $outerRoot 'vendor'
 $shortcutDestination = Join-Path $outerRoot 'INKORA 3D Modeler.lnk'
 
 function Invoke-Checked {
@@ -57,6 +61,10 @@ if (-not (Test-Path -LiteralPath $htmlSource -PathType Leaf)) {
     throw "HTML source not found: $htmlSource"
 }
 
+if (-not (Test-Path -LiteralPath $vendorSource -PathType Container)) {
+    throw "Vendor libraries not found: $vendorSource"
+}
+
 Push-Location $electronRoot
 try {
     Invoke-Checked 'npm.cmd' @('run', 'test:geometry')
@@ -95,6 +103,11 @@ Publish-Artifact $installer.FullName $installerDestination
 Publish-Artifact $portable.FullName $portableDestination
 Publish-Artifact $htmlSource $htmlDestination
 
+if (Test-Path -LiteralPath $vendorDestination) {
+    Remove-Item -LiteralPath $vendorDestination -Recurse -Force
+}
+Copy-Item -LiteralPath $vendorSource -Destination $vendorDestination -Recurse -Force
+
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutDestination)
 $shortcut.TargetPath = $developmentTarget
@@ -107,4 +120,5 @@ $shortcut.Save()
 Write-Host "Installer: $installerDestination"
 Write-Host "Portable:  $portableDestination"
 Write-Host "HTML:      $htmlDestination"
+Write-Host "Vendor:    $vendorDestination"
 Write-Host "Shortcut:  $shortcutDestination"
