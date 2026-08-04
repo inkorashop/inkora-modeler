@@ -182,6 +182,11 @@ La prueba abre el HTML real dentro de Electron y valida:
 - extrusiones separadas;
 - generacion y lectura interna del 3MF;
 - mallas cerradas por conteo de aristas geometricas;
+- reimportacion completa: 3MF y OBJ con proyecto incrustado vuelven
+  identicos, y sin el se reconstruyen desde la malla conservando piezas,
+  colores y medidas (tolerancia `0,01 mm`, la grilla de Clipper);
+- restauracion real del proyecto incrustado, que es el mismo camino que
+  abrir un `.inkora3d` guardado;
 - capturas 2D y 3D para inspeccion visual.
 
 Referencia aprobada de `v1.0.4`:
@@ -364,6 +369,26 @@ Un modelo multicolor se escribe como:
 - `pid/pindex` por volumen;
 - metadata de nombre/extrusor y arrays de paleta con igual longitud.
 
+### Proyecto incrustado y reimportacion
+
+Desde el 2026-08-04, todo 3MF y todo OBJ que genera el programa lleva su
+propio proyecto adentro: el 3MF como una parte mas del paquete OPC
+(`Metadata/INKORA/project.json`, sin relacion en `.rels`, DEFLATE mientras el
+resto sigue STORE), el OBJ como comentarios `#` en base64. Es el mismo payload
+que se escribe a un `.inkora3d`.
+
+Un archivo exportado vuelve entonces **identico**: contornos 2D, alturas,
+biseles, huecos, grupos, nombres, colores y transformaciones. Sin esa parte
+—archivo de otro programa— se reconstruye cada pieza uniendo con Clipper sus
+triangulos proyectados a XY. Para un prisma esa union es su perfil 2D exacto
+con sus huecos: las paredes verticales proyectan area cero y el hueco no
+tiene triangulos que lo tapen. La altura sale del rango Z, la elevacion del Z
+minimo, el color del `colorgroup`/`basematerials` (3MF) o del `.mtl` (OBJ).
+El bisel no viaja en la malla y vuelve en 0.
+
+La parte extra no cambia lo que lee el laminador y eso se verifica, no se
+supone: el fixture que la regresion pasa por Bambu Studio la lleva incrustada.
+
 INKORA se conserva como `Application`. No usar el prefijo `BambuStudio-`:
 Bambu lo interpreta como proyecto nativo y espera perfiles completos de
 maquina, proceso, placa y filamentos. Inventar esa identidad crea archivos
@@ -516,6 +541,17 @@ la pieza sin material y la union 2D sin solido. `enclosesInterior()` exige
 que el hijo sea estrictamente mas chico antes de aceptarlo como hueco, tanto
 al armar el flat mesh como al absorber hijos y al restar interiores
 seleccionados.
+
+**Y tambien al restaurar un snapshot.** `piece._holeIdxs` conserva el indice
+del hijo aunque la extrusion lo haya descartado por esta misma regla, asi que
+`buildSourceShape()` dentro de `restoreSnapshot` tiene que volver a filtrarlo.
+Faltaba hasta el 2026-08-04, y el efecto no era una pieza rara sino la escena
+entera: la union tiraba en la primera pieza y la restauracion abortaba ahi.
+En el Tucan pasa cuatro veces (contornos 0/14, 1/13, 7/8, 9/11), asi que
+guardar un `.inkora3d` ya extruido y reabrirlo no devolvia el modelo. Un
+filtro de este tipo que exista en el camino de edicion tiene que existir
+tambien en el de restauracion, o los dos caminos dejan de describir el mismo
+solido.
 
 **Un contorno cuyos hijos seleccionados cubren todo su interior no es un
 error.** No aporta material propio; lo aporta cada hijo como pieza. Se

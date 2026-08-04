@@ -683,8 +683,9 @@ async function collectMetrics(win) {
 
       PanelUI.clearAllSelection();
       ownerIdxs.forEach(idx => PanelUI.selectOne(idx, true, undefined, 'top'));
+      // Agrupar es la tecla G sola desde que Ctrl+G pasó a ser Guardar.
       document.dispatchEvent(new KeyboardEvent('keydown', {
-        bubbles: true, key: 'g', ctrlKey: true,
+        bubbles: true, key: 'g',
       }));
       const groupsAfterAction = State.groups.length;
       document.getElementById('btn-undo').click();
@@ -1012,6 +1013,110 @@ async function collectMetrics(win) {
       return { contours, voids, selectable, colors, modes };
     }
 
+    /* Reimportacion de un modelo exportado. Cubre los dos caminos:
+
+       - con proyecto incrustado, el archivo vuelve identico al original
+         (mismos contornos, mismas piezas, mismos colores);
+       - sin el, la pieza se reconstruye desde la malla y tienen que
+         coincidir la cantidad de piezas, sus colores, su altura y su
+         huella 2D. Esa es la unica prueba de que la union de triangulos
+         proyectados devuelve el perfil y no una silueta cualquiera.
+
+       Se corre sobre el Tucan en modo separado: varias piezas, varios
+       colores y un hueco real. */
+    async function testModelImportRoundTrip(text, name, extension) {
+      await importThroughFileInput(text, name + extension);
+      PanelUI.selectAll();
+      State.extrudeMode = 'separate';
+      document.getElementById('ex-depth').value = '3';
+      document.getElementById('ex-bevel').value = '0';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const payload = JSON.stringify(window.inkoraProject.buildPayload());
+      const originalPieces = State.pieces.length;
+      const originalContours = State.contours.length;
+      const originalColors = [...new Set(State.pieces.map(piece => piece.color))].sort();
+
+      function measure(pieces) {
+        const box = new THREE.Box3();
+        pieces.forEach(piece => box.expandByObject(piece.mesh));
+        const size = box.getSize(new THREE.Vector3());
+        return [rounded(size.x), rounded(size.y), rounded(size.z)];
+      }
+      const originalSize = measure(State.pieces);
+
+      // 1. 3MF con proyecto incrustado.
+      const embedded3MF = await Exporter.generate3MFBlob(State.pieces, name, {
+        clearanceMm: 0,
+        embeddedProject: payload,
+      });
+      const embeddedZip = await JSZip.loadAsync(embedded3MF.blob);
+      const embeddedRead = await MeshImport.read3MF(await embedded3MF.blob.arrayBuffer());
+
+      // 2. 3MF sin incrustar: reconstruccion desde la malla.
+      const plain3MF = await Exporter.generate3MFBlob(State.pieces, name, { clearanceMm: 0 });
+      const plainRead = await MeshImport.read3MF(await plain3MF.blob.arrayBuffer());
+      const rebuilt = MeshImport.meshesToSnapshot(plainRead.meshes, name);
+
+      // 3. OBJ, los dos caminos.
+      const embeddedOBJ = Exporter.generateOBJFiles(State.pieces, name, {
+        clearanceMm: 0,
+        embeddedProject: payload,
+      });
+      const objEmbeddedRead = MeshImport.readOBJ(embeddedOBJ.objText, embeddedOBJ.mtlText);
+      const plainOBJ = Exporter.generateOBJFiles(State.pieces, name, { clearanceMm: 0 });
+      const objPlainRead = MeshImport.readOBJ(plainOBJ.objText, plainOBJ.mtlText);
+      const objRebuilt = MeshImport.meshesToSnapshot(objPlainRead.meshes, name);
+
+      /* Restaurar de verdad el proyecto incrustado. Es el mismo camino que
+         abrir un .inkora3d guardado, y el unico que ejercita la restauracion
+         de piezas cuyo "hueco" registrado tiene la misma area que su padre:
+         al extruir, enclosesInterior() lo descarta, pero el indice queda en
+         _holeIdxs. Sin ese mismo filtro al restaurar, la resta deja la pieza
+         sin material y la escena entera se cae en la primera pieza. */
+      window.inkoraProject.open(embeddedRead.project.snapshot, { name, dirty: true });
+      const restoredPieces = State.pieces.length;
+      const restoredColors = [...new Set(State.pieces.map(piece => piece.color))].sort();
+      const restoredSize = measure(State.pieces);
+
+      // Reconstruir de verdad la escena desde la malla del 3MF y medirla:
+      // el snapshot solo prueba que los numeros salen, no que la geometria
+      // vuelva a armarse.
+      window.inkoraProject.open(rebuilt.snapshot, { name, dirty: true });
+      const rebuiltPieces = State.pieces.length;
+      const rebuiltColors = [...new Set(State.pieces.map(piece => piece.color))].sort();
+      const rebuiltSize = measure(State.pieces);
+
+      return {
+        originalPieces,
+        originalContours,
+        originalColors,
+        originalSize,
+        embedded3MFPartPresent: !!embeddedZip.file('Metadata/INKORA/project.json'),
+        embedded3MFProjectPieces: embeddedRead.project
+          ? embeddedRead.project.snapshot.contours.filter(c => c.pieceData).length
+          : 0,
+        embedded3MFProjectContours: embeddedRead.project
+          ? embeddedRead.project.snapshot.contours.length
+          : 0,
+        plain3MFMeshCount: plainRead.meshes.length,
+        plain3MFHasProject: !!plainRead.project,
+        objEmbeddedProjectContours: objEmbeddedRead.project
+          ? objEmbeddedRead.project.snapshot.contours.length
+          : 0,
+        objPlainMeshCount: objPlainRead.meshes.length,
+        objRebuiltPieces: objRebuilt.snapshot.contours.filter(c => c.pieceData).length,
+        restoredPieces,
+        restoredColors,
+        restoredSize,
+        rebuiltPieces,
+        rebuiltColors,
+        rebuiltSize,
+        rebuiltSkipped: rebuilt.skipped.length,
+      };
+    }
+
     /* Serializador OBJ. Comparte con el 3MF la etapa geometrica, asi que
        aca no se re-valida la malla: se valida lo que es exclusivo del
        formato y no lo cubre ningun otro test.
@@ -1288,10 +1393,17 @@ async function collectMetrics(win) {
         await zip.file('Metadata/project_settings.config').async('string')
       );
 
+      /* El fixture que va a Bambu Studio lleva el proyecto incrustado: es
+         la unica forma de comprobar de verdad que esa parte extra no
+         cambia como lee el laminador el 3MF. Si Bambu deja de laminarlo,
+         el incrustado deja de ser gratis y hay que revisarlo. */
       const cleared = await Exporter.generate3MFBlob(
         State.pieces,
         'tucan-merged-layered-clearance-test',
-        { clearanceMm: 0.001 }
+        {
+          clearanceMm: 0.001,
+          embeddedProject: JSON.stringify(window.inkoraProject.buildPayload()),
+        }
       );
       const clearedZip = await JSZip.loadAsync(cleared.blob);
       const clearedModelXml = await clearedZip.file('3D/3dmodel.model').async('string');
@@ -1341,6 +1453,7 @@ async function collectMetrics(win) {
       materialVoids: await testMaterialVoidDetection(),
       dxf: summarize(await DXFParser.loadText(dxfText)),
       svg: summarize(await SVGParser.loadText(svgText)),
+      modelImportRoundTrip: await testModelImportRoundTrip(dxfText, 'tucan-roundtrip', '.dxf'),
       objTucan: await testOBJExport(dxfText, 'tucan-obj', '.dxf'),
       objLayered: await testOBJExport(layeredSvgText, 'cataratas-obj', '.svg'),
       layeredDxf: await testLayeredArtwork(layeredDxfText, 'cataratas-dxf', '.dxf'),
@@ -1669,6 +1782,48 @@ function validate(metrics) {
       failures.push(`${format.toUpperCase()}: el 3MF contiene ${flow.nonPositiveVolumes} volumenes no positivos`);
     }
   }
+  /* Reimportacion. El contrato tiene dos mitades y las dos importan:
+     el proyecto incrustado devuelve el original exacto, y la
+     reconstruccion desde malla devuelve las mismas piezas, colores y
+     medidas. Una tolerancia de 0,01 mm cubre la cuantizacion de la
+     grilla de Clipper (1e-4 mm) sin dejar pasar una silueta distinta. */
+  const trip = metrics.modelImportRoundTrip;
+  if (!trip.embedded3MFPartPresent ||
+      trip.embedded3MFProjectContours !== trip.originalContours ||
+      trip.embedded3MFProjectPieces !== trip.originalPieces) {
+    failures.push('el 3MF no conserva el proyecto incrustado completo');
+  }
+  if (trip.objEmbeddedProjectContours !== trip.originalContours) {
+    failures.push('el OBJ no conserva el proyecto incrustado completo');
+  }
+  if (trip.plain3MFHasProject) {
+    failures.push('un 3MF exportado sin proyecto trae uno igual');
+  }
+  if (trip.plain3MFMeshCount !== trip.originalPieces ||
+      trip.objPlainMeshCount !== trip.originalPieces ||
+      trip.objRebuiltPieces !== trip.originalPieces) {
+    failures.push('la lectura de malla no recupera una pieza por volumen exportado');
+  }
+  if (trip.restoredPieces !== trip.originalPieces ||
+      trip.restoredColors.join(',') !== trip.originalColors.join(',') ||
+      trip.restoredSize.some((value, i) => Math.abs(value - trip.originalSize[i]) > 1e-4)) {
+    failures.push(
+      'restaurar el proyecto incrustado no devuelve el modelo original ' +
+      `(${trip.restoredPieces}/${trip.originalPieces} piezas)`
+    );
+  }
+  if (trip.rebuiltSkipped ||
+      trip.rebuiltPieces !== trip.originalPieces ||
+      trip.rebuiltColors.join(',') !== trip.originalColors.join(',')) {
+    failures.push('la reconstruccion desde malla pierde piezas o colores');
+  }
+  if (trip.rebuiltSize.some((value, i) => Math.abs(value - trip.originalSize[i]) > 0.01)) {
+    failures.push(
+      'la reconstruccion desde malla no conserva las medidas: ' +
+      `${JSON.stringify(trip.originalSize)} -> ${JSON.stringify(trip.rebuiltSize)}`
+    );
+  }
+
   const beveled = metrics.beveled3MF;
   if (beveled.pieceCount !== 1 ||
       beveled.failedExports ||

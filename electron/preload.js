@@ -27,6 +27,17 @@ contextBridge.exposeInMainWorld('inkoraAppInfo', {
   version,
 });
 
+// Cierre con cambios sin guardar. El proceso principal frena el cierre y
+// avisa por aca; la pagina pregunta con su propio dialogo y recien cuando
+// el usuario resuelve (guardo o descarto) confirma. Sin este puente —o sea,
+// en el navegador— el HTML cae al aviso generico de `beforeunload`.
+contextBridge.exposeInMainWorld('inkoraWindow', {
+  onCloseRequest: (callback) => {
+    ipcRenderer.on('app-close-request', () => callback());
+  },
+  confirmClose: () => ipcRenderer.send('app-close-confirmed'),
+});
+
 // `data` abre un unico 3MF; `files` abre un conjunto que debe quedar junto
 // en la misma carpeta (OBJ + su MTL), marcando cual se abre con `open: true`.
 contextBridge.exposeInMainWorld('inkoraSlicer', {

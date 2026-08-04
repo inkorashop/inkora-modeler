@@ -3,6 +3,97 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-04 (seguimiento 2) - Reimportar un diseño exportado
+
+### Que se pedia
+
+Volver a traer al programa un diseño ya exportado, con sus tamaños, colores,
+nombres y piezas. El 3MF y el OBJ solo transportan triangulos: no llevan los
+contornos 2D, ni las alturas de extrusion, ni el bisel, ni la relacion entre
+piezas. Reconstruir todo eso desde la malla es imposible en general.
+
+### Decision: el proyecto viaja dentro del propio archivo exportado
+
+Un 3MF **es** un paquete OPC, o sea un ZIP. El laminador entra por
+`_rels/.rels`, sigue la relacion a `3D/3dmodel.model` y descarta lo que no
+conoce. El exportador ya venia escribiendo dos partes que no son del
+estandar (`Metadata/model_settings.config` y `project_settings.config`,
+invento de Bambu) y ningun laminador se queja. Se agrega una tercera:
+
+    Metadata/INKORA/project.json
+
+con exactamente el mismo payload que se escribe a un `.inkora3d`. Sin
+relacion en `.rels`, para que ningun consumidor la confunda con geometria, y
+declarada en `[Content_Types].xml`. Es la unica parte comprimida del paquete
+(DEFLATE); el resto queda STORE, tal cual estaba, para no cambiar en nada lo
+que ya lee el laminador. En el Tucan: 74 KB de JSON -> 13 KB en el archivo.
+
+El OBJ no tiene contenedor, pero si comentarios `#`, que todo parser del
+formato descarta. El mismo payload viaja ahi en base64, entre dos marcas.
+Pasados los 8 MB en base64 no se incrusta y se avisa por consola.
+
+**Verificado, no supuesto**: la regresion arma el fixture que va a Bambu
+Studio *con* la parte incrustada. Bambu lo lamina igual que antes -- un solo
+objeto ensamblado, 0 aristas abiertas, 0 no-manifold, mismo conteo de
+triangulos, G-code no vacio. El CLI de Orca en Windows crashea con
+`--info`, pero crashea identico sobre un 3MF sin la parte: es su CLI, no el
+incrustado.
+
+### Camino de respaldo: reconstruir desde la malla
+
+Para un archivo de otro programa, o uno de INKORA al que le sacaron la
+parte, se reconstruye cada pieza uniendo con Clipper sus triangulos
+proyectados al plano XY. Para un prisma -- que es lo que produce una
+extrusion -- esa union es exactamente su perfil 2D con sus huecos: las
+paredes verticales proyectan area cero y el hueco no tiene triangulos que lo
+tapen. La altura sale del rango Z y la elevacion del Z minimo.
+
+Se descartan los triangulos con area proyectada menor a la que Clipper ya
+rechaza (1e-8 mm2) y se deduplican los que coinciden en planta -- las dos
+tapas de un prisma son la misma figura --, lo que baja a la mitad el trabajo.
+
+Lo que ese camino no puede devolver: el bisel (queda en 0) y los parametros
+originales. Un modelo con voladizos reales entra por su silueta.
+
+### Por que no se reconstruye una malla arbitraria como pieza suelta
+
+`State` no sabe representar un triangulo suelto: una pieza siempre nace de un
+contorno 2D que se extruye, y de ahi dependen el historial, el guardado y la
+exportacion. Meter mallas crudas hubiera pedido reescribir ese modelo entero.
+La reconstruccion produce contornos y piezas reales, asi que todo lo demas
+sigue funcionando sin cambios.
+
+## 2026-08-04 (seguimiento 3) - Guardar un proyecto extruido estaba roto
+
+### Sintoma
+
+Extruir el Tucan, cambiar de pestaña y volver dejaba **0 piezas** y un solo
+contorno, con `La union 2D produjo una pieza vacia` en consola. El mismo
+camino es el de guardar un `.inkora3d` y reabrirlo: guardar un proyecto ya
+extruido y volver a abrirlo no devolvia el modelo. Reproducido tambien en el
+`index.html` de HEAD, sin ningun cambio encima: era un bug viejo, no una
+regresion nueva.
+
+### Causa
+
+Es el invariante de `GEOMETRY_PIPELINE` §13: un anillo hijo con la misma area
+que su padre no es un hueco, es la misma frontera vista desde el otro lado.
+En el Tucan pasa cuatro veces (contornos 0/14, 1/13, 7/8, 9/11).
+
+`enclosesInterior()` lo filtra al armar el flat mesh, al absorber hijos y al
+restar interiores seleccionados -- pero **no** al restaurar un snapshot.
+`piece._holeIdxs` conserva el indice aunque la extrusion lo haya descartado,
+asi que `buildSnapshotPieceGeometry()` lo restaba de nuevo, la pieza quedaba
+sin material, `unionShapes()` tiraba y la restauracion abortaba en la primera
+pieza -- por eso quedaba un solo contorno.
+
+### Correccion
+
+El mismo `enclosesInterior()` en `buildSourceShape()`, dentro de
+`restoreSnapshot`. La regresion ahora restaura de verdad el proyecto
+incrustado del Tucan y exige las 16 piezas, sus 3 colores y sus medidas.
+
+
 ## 2026-08-04 (seguimiento) - Respaldo por CDN: el HTML suelto tambien arranca
 
 ### Sintoma

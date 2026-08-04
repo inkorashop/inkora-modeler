@@ -528,8 +528,11 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 /* ── Shortcuts dropdown ── */
 #shortcuts-wrap{position:relative}
 #btn-shortcuts{gap:5px;font-family:var(--mono);font-size:11px;letter-spacing:.04em}
+/* Fijo y posicionado por JS, no absolute: el header scrollea en horizontal
+   y su overflow recortaba el panel entero (quedaba visible una franja de
+   3 px). Mismo criterio que #file-menu y los desplegables de exportación. */
 #shortcuts-panel{
-  position:absolute;top:calc(100% + 7px);right:0;width:330px;
+  position:fixed;top:0;left:0;width:330px;
   background:var(--surface);
   border:1px solid var(--border);
   border-radius:var(--r2);
@@ -564,7 +567,9 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .sc-row{display:flex;align-items:center;gap:10px;padding:5px 13px;transition:background .1s}
 .sc-row:hover{background:var(--surface2)}
 .sc-desc{flex:1;font-size:11px;color:var(--text-dim)}
-.sc-key{display:inline-flex;align-items:center;gap:3px;flex-shrink:0}
+/* Un atajo con dos combinaciones (Guardar / Guardar como) no entra en una
+   línea: puede envolver y alinearse a la derecha en vez de desbordar. */
+.sc-key{display:inline-flex;align-items:center;justify-content:flex-end;gap:3px;flex-wrap:wrap;min-width:0}
 kbd{
   display:inline-block;padding:2px 6px;
   border-radius:4px;border:1px solid var(--border2);
@@ -672,12 +677,22 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 }
 .project-tab-close:hover{background:rgba(255,79,79,.12);color:var(--danger)}
 #btn-new-project{height:24px;padding:3px 9px;font-size:10px;flex-shrink:0;}
-#recent-wrap{position:relative;}
+/* El panel de recientes cuelga del botón Archivo, no del ítem de menú:
+   así el menú se puede cerrar sin llevarse el panel puesto. `display:contents`
+   deja el wrapper en el DOM (los handlers de click-afuera lo consultan) pero
+   fuera del layout.
+
+   `position:fixed` y no absolute: el header tiene overflow para poder
+   scrollear horizontalmente, y eso recorta cualquier hijo posicionado
+   dentro. Es el mismo motivo por el que los desplegables de formato y
+   laminador ya se posicionan por JS. */
+#file-menu-wrap{position:relative;flex-shrink:0;}
+#recent-wrap{display:contents;}
 #recent-panel{
-  position:absolute;top:calc(100% + 7px);left:0;width:360px;max-width:calc(100vw - 24px);
+  position:fixed;top:0;left:0;width:360px;max-width:calc(100vw - 24px);
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
   box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.03);
-  z-index:350;display:none;overflow:hidden;
+  z-index:900;display:none;overflow:hidden;
 }
 #recent-panel.open{display:block}
 .recent-header{padding:9px 12px;border-bottom:1px solid var(--border2);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-faint);}
@@ -691,6 +706,30 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 .recent-meta{font-size:9px;color:var(--text-faint);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .recent-remove{width:18px;height:18px;border:none;background:transparent;color:var(--text-faint);cursor:pointer;border-radius:3px;font-size:13px;line-height:1;}
 .recent-remove:hover{background:rgba(255,79,79,.12);color:var(--danger)}
+#file-menu{
+  position:fixed;top:0;left:0;min-width:272px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r2);
+  box-shadow:var(--shadow-lg),0 0 0 1px rgba(255,255,255,.03);
+  z-index:901;display:none;padding:4px;
+}
+#file-menu.open{display:block}
+#btn-file-menu[aria-expanded="true"]{border-color:rgba(var(--accent-rgb),.45);color:var(--accent)}
+.file-menu-caret{opacity:.6;margin-left:1px;}
+.file-menu-item{
+  width:100%;display:flex;align-items:center;gap:14px;
+  padding:7px 9px;border:none;background:transparent;border-radius:var(--r);
+  color:var(--text);font-family:var(--mono);font-size:11px;
+  text-align:left;cursor:pointer;transition:background .1s,color .1s;
+}
+.file-menu-item:hover:not(:disabled){background:var(--surface2);color:var(--accent)}
+.file-menu-item:disabled{opacity:.32;cursor:default}
+.file-menu-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.file-menu-key{color:var(--text-faint);font-size:9px;letter-spacing:.03em;flex-shrink:0;}
+.file-menu-sep{height:1px;background:var(--border2);margin:4px 7px;}
+/* Pestaña con cambios sin guardar: el asterisco lo pone el título, el punto
+   de color es el refuerzo visual para encontrarla de un vistazo. */
+.project-tab.dirty{border-color:rgba(var(--accent-rgb),.35)}
+.project-tab.dirty .project-tab-title{color:var(--accent)}
 /* Boton partido: el cuerpo ejecuta, el caret elige el preset. Se juntan
    visualmente con un borde compartido para que se lean como un control. */
 .split-btn{display:inline-flex;align-items:stretch}
@@ -830,29 +869,50 @@ html.light{
   <header id="header">
     <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.17</span></div>
     <div class="sep"></div>
-    <button class="btn" id="btn-import" title="Importar archivo DXF o SVG">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9h8M6 2v5.5M3.5 5L6 7.5 8.5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Importar DXF/SVG
-    </button>
-    <button class="btn" id="btn-paste-svg" title="Pegar DXF/SVG copiado (Ctrl+C en CorelDRAW → Ctrl+V acá, o pegar texto SVG a mano)">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2.5h4v1.2H4V2.5zM3 3.5h6v7H3v-7z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
-      Pegar SVG
-    </button>
-    <button class="btn" id="btn-open-project" title="Abrir proyecto INKORA 3D (Ctrl+O)">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9.5h8V4.2H6.2L5.1 3H2v6.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-      Abrir proyecto
-    </button>
-    <div id="recent-wrap">
-      <button class="btn" id="btn-recent-projects" title="Abrir proyectos recientes">▾ Recientes</button>
-      <div id="recent-panel">
-        <div class="recent-header">Proyectos recientes</div>
-        <div class="recent-list" id="recent-list"><div class="recent-empty">Sin proyectos recientes.</div></div>
+    <!-- Menú Archivo: nuevo, abrir, recientes, guardar, guardar como e
+         importar. Exportar y abrir en laminador quedan afuera, sueltos en
+         la barra, porque son el final del flujo y se usan a cada rato. -->
+    <div id="file-menu-wrap">
+      <button class="btn" id="btn-file-menu" type="button"
+              aria-haspopup="menu" aria-expanded="false" aria-controls="file-menu"
+              title="Proyecto: nuevo, abrir, guardar e importar">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 9.5h8V4.2H6.2L5.1 3H2v6.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+        Archivo
+        <svg class="file-menu-caret" width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 3.5 5 6.5l3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div id="file-menu" role="menu">
+        <button class="file-menu-item" id="btn-new-project-menu" type="button" role="menuitem">
+          <span class="file-menu-label">Proyecto nuevo</span>
+        </button>
+        <button class="file-menu-item" id="btn-open-project" type="button" role="menuitem">
+          <span class="file-menu-label">Abrir proyecto…</span><span class="file-menu-key">Ctrl+O</span>
+        </button>
+        <button class="file-menu-item" id="btn-recent-projects" type="button" role="menuitem">
+          <span class="file-menu-label">Proyectos recientes</span><span class="file-menu-key">▸</span>
+        </button>
+        <div class="file-menu-sep"></div>
+        <button class="file-menu-item" id="btn-save-project" type="button" role="menuitem" disabled>
+          <span class="file-menu-label">Guardar</span><span class="file-menu-key">Ctrl+S · Ctrl+G</span>
+        </button>
+        <button class="file-menu-item" id="btn-save-as-project" type="button" role="menuitem" disabled>
+          <span class="file-menu-label">Guardar como…</span><span class="file-menu-key">Ctrl+Shift+S · Ctrl+Shift+G</span>
+        </button>
+        <div class="file-menu-sep"></div>
+        <button class="file-menu-item" id="btn-import" type="button" role="menuitem">
+          <span class="file-menu-label">Importar DXF, SVG, 3MF u OBJ…</span><span class="file-menu-key">Ctrl+I</span>
+        </button>
+        <button class="file-menu-item" id="btn-paste-svg" type="button" role="menuitem"
+                title="Ctrl+C en CorelDRAW → Ctrl+V acá, o pegar el texto SVG a mano">
+          <span class="file-menu-label">Pegar SVG/DXF…</span>
+        </button>
+      </div>
+      <div id="recent-wrap">
+        <div id="recent-panel">
+          <div class="recent-header">Proyectos recientes</div>
+          <div class="recent-list" id="recent-list"><div class="recent-empty">Sin proyectos recientes.</div></div>
+        </div>
       </div>
     </div>
-    <button class="btn" id="btn-save-project" disabled title="Guardar proyecto completo (Ctrl+S)">
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.2 2h6.2L10 3.6V10H2.2V2zM4 2v3h4V2M4 10V7h4v3" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
-      Guardar proyecto
-    </button>
     <button class="btn primary" id="btn-extrude" disabled title="Extruir la selección">
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 9V3M3.5 5.5L6 3l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Extruir
@@ -959,7 +1019,7 @@ html.light{
         </div>
       </div>
     </div>
-    <input type="file" id="file-input" accept=".dxf,.svg" style="display:none">
+    <input type="file" id="file-input" accept=".dxf,.svg,.3mf,.obj,.mtl" multiple style="display:none">
     <input type="file" id="project-input" accept=".inkora3d,.json" style="display:none">
   </header>
 
@@ -982,6 +1042,22 @@ html.light{
     </div>
   </div>
 
+  <!-- Modal: cambios sin guardar. Es la misma pregunta para cerrar el
+       programa y para cerrar una pestaña, y la misma en Electron y en el
+       navegador: el unico caso donde el navegador impone su propio dialogo
+       es el cierre de la pestaña del browser (beforeunload). -->
+  <div id="unsaved-modal" style="display:none;position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.72);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+    <div style="width:420px;max-width:92vw;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.5);">
+      <div style="font-family:var(--display);font-size:12px;font-weight:700;letter-spacing:.1em;color:var(--accent);text-transform:uppercase;margin-bottom:10px;">Cambios sin guardar</div>
+      <p id="unsaved-text" style="font-size:12.5px;color:var(--text);line-height:1.55;margin:0 0 16px;"></p>
+      <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;">
+        <button class="btn" id="unsaved-cancel">Cancelar</button>
+        <button class="btn danger" id="unsaved-discard">Descartar</button>
+        <button class="btn primary" id="unsaved-save">Guardar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="project-tabs-row">
     <button class="btn" id="btn-new-project" title="Crear una pestaña de proyecto nueva">+ Proyecto</button>
     <div id="project-tabs"></div>
@@ -990,7 +1066,7 @@ html.light{
   <div id="vp-wrap">
     <canvas id="viewport"></canvas>
     <canvas id="axis-gizmo"></canvas>
-    <div id="drop-overlay">Soltar DXF aquí</div>
+    <div id="drop-overlay">Soltar DXF, SVG, 3MF, OBJ o .inkora3d aquí</div>
     <div id="marquee"></div>
     <div id="mode-badge">Sin geometría</div>
     <div id="sel-hint"></div>
@@ -1034,7 +1110,7 @@ html.light{
     <div id="pieces-wrap">
       <div id="empty-state">
         <div class="empty-icon">◻</div>
-        Importá un DXF<br>para comenzar.
+        Importá un DXF, SVG,<br>3MF u OBJ para comenzar.
       </div>
     </div>
   </div>
@@ -5126,6 +5202,47 @@ const Exporter = (() => {
     };
   }
 
+  /* ── Proyecto incrustado ──────────────────────────────────────────────
+     Un 3MF es un paquete OPC: un ZIP con partes. El laminador entra por
+     `_rels/.rels`, sigue la relacion al `3D/3dmodel.model` y no mira nada
+     mas; las partes que no conoce las ignora. Bambu ya usa ese mecanismo
+     con `Metadata/*.config`, que tampoco son del estandar.
+
+     INKORA agrega su propio proyecto como una parte mas, sin relacion en
+     `.rels` para que ningun consumidor la confunda con geometria. Asi un
+     3MF exportado vuelve a entrar al programa como proyecto editable —
+     contornos 2D, alturas, huecos, nombres y colores — en vez de una
+     malla de la que solo se puede reconstruir la silueta.
+
+     El OBJ no tiene contenedor, pero si comentarios `#`, que todo parser
+     del formato descarta. El mismo payload viaja ahi en base64.
+
+     Sin proyecto incrustado la importacion sigue funcionando: cae a
+     reconstruir cada pieza desde su malla (ver MeshImport).
+  ─────────────────────────────────────────────────────────────────────── */
+  const EMBEDDED_PROJECT_PART = 'Metadata/INKORA/project.json';
+  const OBJ_EMBED_BEGIN = '# INKORA-PROJECT-BEGIN v1 (base64; el laminador ignora los comentarios)';
+  const OBJ_EMBED_END = '# INKORA-PROJECT-END';
+  // Un proyecto muy grande en base64 dentro de un archivo de texto deja de
+  // ser un extra barato. Pasado el tope se exporta sin el, y la reimportacion
+  // cae a la reconstruccion desde malla.
+  const MAX_OBJ_EMBED_BYTES = 8 * 1024 * 1024;
+
+  function embeddedProjectText(options) {
+    const raw = options?.embeddedProject;
+    return typeof raw === 'string' && raw ? raw : null;
+  }
+
+  function utf8ToBase64(text) {
+    const bytes = new TextEncoder().encode(text);
+    let binary = '';
+    const CHUNK = 0x8000; // fromCharCode revienta con arrays enormes
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(binary);
+  }
+
   /* ── generate3MFBlob ──────────────────────────────────────────────────
      Serializador 3MF. Exportar y abrir en laminador consumen este mismo
      blob para que ningun camino quede desactualizado.
@@ -5219,11 +5336,14 @@ const Exporter = (() => {
       default_filament_colour: filamentColors.map(() => ''),
     }, null, 2);
 
+    const embeddedProject = embeddedProjectText(options);
+
     zip.file('[Content_Types].xml',
       `<?xml version="1.0" encoding="UTF-8"?>` +
       `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
         `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
         `<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>` +
+        (embeddedProject ? `<Default Extension="json" ContentType="application/json"/>` : '') +
       `</Types>`
     );
     zip.file('_rels/.rels',
@@ -5236,6 +5356,15 @@ const Exporter = (() => {
     zip.file('3D/3dmodel.model', modelXML);
     zip.file('Metadata/model_settings.config', modelSettingsXML);
     zip.file('Metadata/project_settings.config', projectSettings);
+    // Unica parte comprimida del paquete: el resto queda STORE, tal cual lo
+    // venia escribiendo JSZip, para no cambiar en nada lo que ya lee el
+    // laminador. Mezclar metodos dentro de un ZIP es legal y universal.
+    if (embeddedProject) {
+      zip.file(EMBEDDED_PROJECT_PART, embeddedProject, {
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 },
+      });
+    }
 
     const blob = await zip.generateAsync({ type: 'blob' });
     return {
@@ -5246,6 +5375,7 @@ const Exporter = (() => {
       rootObjectId,
       colorCount: colors.length,
       clearanceMm,
+      embeddedProject: !!embeddedProject,
     };
   }
 
@@ -5328,6 +5458,24 @@ const Exporter = (() => {
       vertexOffset += nVerts;
     });
 
+    const embeddedProject = embeddedProjectText(options);
+    if (embeddedProject) {
+      const base64 = utf8ToBase64(embeddedProject);
+      if (base64.length > MAX_OBJ_EMBED_BYTES) {
+        console.warn(
+          'Proyecto demasiado grande para incrustarlo en el OBJ ' +
+          `(${Math.round(base64.length / 1024)} KB). El archivo sale sin el; ` +
+          'al reimportarlo, las piezas se reconstruyen desde la malla.'
+        );
+      } else {
+        objLines.push(OBJ_EMBED_BEGIN);
+        for (let i = 0; i < base64.length; i += 120) {
+          objLines.push(`# ${base64.slice(i, i + 120)}`);
+        }
+        objLines.push(OBJ_EMBED_END, '');
+      }
+    }
+
     const mtlLines = ['# INKORA 3D Modeler', ''];
     colors.forEach((hex, index) => {
       const r = parseInt(hex.slice(0, 2), 16) / 255;
@@ -5389,7 +5537,539 @@ const Exporter = (() => {
     return { failedCount: result.failedCount, totalCount: result.totalCount };
   }
 
-  return { exportMeshes, generate3MFBlob, generateOBJFiles };
+  return {
+    exportMeshes, generate3MFBlob, generateOBJFiles,
+    // El importador lee las mismas marcas que escribe el exportador: si
+    // cambian aca, cambian en los dos lados a la vez.
+    EMBEDDED_PROJECT_PART, OBJ_EMBED_BEGIN, OBJ_EMBED_END,
+  };
+})();
+
+
+/* ══════════════════════════════════════════════════════
+   MÓDULO 4B — IMPORTACION DE MODELOS 3D (3MF / OBJ+MTL)
+
+   Dos caminos, uno preferente y uno de respaldo:
+
+   1. PROYECTO INCRUSTADO. Un 3MF o un OBJ generado por INKORA lleva su
+      propio proyecto adentro (ver Exporter). Se devuelve tal cual y el
+      archivo vuelve 100% editable: contornos 2D, alturas, biseles,
+      huecos, grupos, nombres, colores y transformaciones.
+
+   2. RECONSTRUCCION DESDE LA MALLA. Para un archivo de otro programa —o
+      uno de INKORA al que le sacaron la parte incrustada— no hay 2D que
+      recuperar: solo triangulos. Se reconstruye proyectando cada
+      triangulo al plano XY y uniendolos con Clipper. Para un prisma
+      (que es lo que produce una extrusion) esa union es exactamente su
+      perfil 2D, con sus huecos, porque las paredes verticales proyectan
+      area cero y el hueco no tiene triangulos que lo tapen. La altura
+      sale del rango Z y la elevacion del Z minimo.
+
+      Lo que ese camino NO puede devolver: el bisel (queda en 0) y la
+      relacion original entre piezas. Un modelo con voladizos reales
+      —que ninguna extrusion de INKORA produce— entra por su silueta.
+
+   El sistema de coordenadas es el mismo en los dos formatos: el OBJ se
+   escribe con las mismas mallas ya convertidas a Z-up del 3MF. La vuelta
+   es la inversa exacta de applyWorldTransformTo3MF con offX/offY = 0:
+   punto 2D = (X, Y) del archivo, altura = Z.
+   ══════════════════════════════════════════════════════ */
+const MeshImport = (() => {
+  const UNIT_TO_MM = {
+    micron: 0.001, micrometer: 0.001,
+    millimeter: 1, millimetre: 1,
+    centimeter: 10, centimetre: 10,
+    meter: 1000, metre: 1000,
+    inch: 25.4, foot: 304.8,
+  };
+  // Mismo umbral que usa Clipper para descartar un path (SCALE 1e4 y area
+  // minima 1): por debajo de 1e-8 mm2 el triangulo no aporta region. Filtrar
+  // aca es solo para no construir miles de Shapes de pared vertical.
+  const MIN_TRI_AREA2 = 2e-8;
+  const GRID = 1e4; // 1e-4 mm, la grilla canonica de Solid2D
+
+  /* ── Proyecto incrustado ─────────────────────────────────────────────── */
+  function parseEmbeddedProject(text, source) {
+    let data;
+    try { data = JSON.parse(text); }
+    catch (err) {
+      console.warn(`El proyecto incrustado en el ${source} no se pudo leer.`, err);
+      return null;
+    }
+    if (!data || !data.snapshot || !Array.isArray(data.snapshot.contours)) {
+      console.warn(`El proyecto incrustado en el ${source} no tiene el formato esperado.`);
+      return null;
+    }
+    return data;
+  }
+
+  /* ── 3MF ──────────────────────────────────────────────────────────────
+     El paquete se abre entero, pero primero se busca la parte de INKORA:
+     si esta, el XML de geometria ni se recorre.
+  ─────────────────────────────────────────────────────────────────────── */
+  async function read3MF(arrayBuffer) {
+    if (!globalThis.JSZip) throw new Error('Falta JSZip para leer el 3MF.');
+    let zip;
+    try { zip = await JSZip.loadAsync(arrayBuffer); }
+    catch (err) { throw new Error('El archivo no es un 3MF valido (no se pudo abrir el paquete).'); }
+
+    const embedded = zip.file(Exporter.EMBEDDED_PROJECT_PART);
+    if (embedded) {
+      const project = parseEmbeddedProject(await embedded.async('string'), '3MF');
+      if (project) return { project, meshes: [] };
+    }
+
+    const modelEntry = zip.file(/3dmodel\.model$/i)[0] || zip.file(/\.model$/i)[0];
+    if (!modelEntry) throw new Error('El 3MF no contiene ningun modelo 3D.');
+    return { project: null, meshes: parse3MFModel(await modelEntry.async('string')) };
+  }
+
+  // Namespaces: los 3MF declaran el core como xmlns por defecto y los
+  // materiales con prefijo. Buscar por nombre local evita depender de que
+  // prefijo eligio quien escribio el archivo.
+  function tags(root, localName) {
+    return [...root.getElementsByTagNameNS('*', localName)];
+  }
+
+  function normalizeHex(raw) {
+    const clean = String(raw || '').trim().replace(/^#/, '');
+    if (/^[0-9a-f]{6}$/i.test(clean)) return `#${clean.toLowerCase()}`;
+    if (/^[0-9a-f]{8}$/i.test(clean)) return `#${clean.slice(0, 6).toLowerCase()}`;
+    return null;
+  }
+
+  const IDENTITY = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0];
+
+  /* Transform 3MF: 12 numeros, matriz 4x3 por filas, con el punto como
+     vector fila (p' = p * M + t). */
+  function parseTransform(raw) {
+    if (!raw) return IDENTITY;
+    const n = String(raw).trim().split(/\s+/).map(Number);
+    if (n.length !== 12 || n.some(v => !Number.isFinite(v))) return IDENTITY;
+    return n;
+  }
+
+  function multiplyTransforms(a, b) {
+    const out = new Array(12).fill(0);
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 3; col++) {
+        out[row * 3 + col] =
+          a[row * 3] * b[col] +
+          a[row * 3 + 1] * b[3 + col] +
+          a[row * 3 + 2] * b[6 + col];
+      }
+    }
+    for (let col = 0; col < 3; col++) {
+      out[9 + col] =
+        a[9] * b[col] + a[10] * b[3 + col] + a[11] * b[6 + col] + b[9 + col];
+    }
+    return out;
+  }
+
+  function applyTransform(m, x, y, z) {
+    return [
+      x * m[0] + y * m[3] + z * m[6] + m[9],
+      x * m[1] + y * m[4] + z * m[7] + m[10],
+      x * m[2] + y * m[5] + z * m[8] + m[11],
+    ];
+  }
+
+  function parse3MFModel(xmlText) {
+    const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) {
+      throw new Error('El 3MF trae un modelo XML ilegible.');
+    }
+    const modelEl = tags(doc, 'model')[0];
+    const unit = String(modelEl?.getAttribute('unit') || 'millimeter').toLowerCase();
+    const unitScale = UNIT_TO_MM[unit] ?? 1;
+
+    // Paletas: colorgroup (lo que escribe INKORA) y basematerials (lo que
+    // usan la mayoria de los exportadores).
+    const paletteByPid = new Map();
+    tags(doc, 'colorgroup').forEach(group => {
+      paletteByPid.set(group.getAttribute('id'), tags(group, 'color')
+        .map(color => normalizeHex(color.getAttribute('color'))));
+    });
+    tags(doc, 'basematerials').forEach(group => {
+      paletteByPid.set(group.getAttribute('id'), tags(group, 'base')
+        .map(base => normalizeHex(base.getAttribute('displaycolor'))));
+    });
+
+    const objectById = new Map();
+    tags(doc, 'object').forEach(obj => objectById.set(obj.getAttribute('id'), obj));
+
+    function colorOf(obj, meshEl) {
+      const pid = obj.getAttribute('pid');
+      let pindex = obj.getAttribute('pindex');
+      if (pid && pindex == null && meshEl) {
+        // Sin pindex propio, el color puede venir por triangulo. Se toma el
+        // del primero: una pieza de INKORA es de un color, y para un archivo
+        // ajeno multicolor por triangulo cualquier eleccion es parcial.
+        pindex = tags(meshEl, 'triangle')[0]?.getAttribute('p1') ?? null;
+      }
+      if (!pid || pindex == null) return null;
+      const palette = paletteByPid.get(pid);
+      return palette?.[Number(pindex)] || null;
+    }
+
+    const meshes = [];
+    function walk(objectId, matrix, inheritedColor, depth) {
+      if (depth > 12) return; // componentes ciclicos: cortar sin colgarse
+      const obj = objectById.get(String(objectId));
+      if (!obj) return;
+
+      const meshEl = tags(obj, 'mesh')[0];
+      const color = colorOf(obj, meshEl) || inheritedColor;
+
+      const components = tags(obj, 'component');
+      if (components.length) {
+        components.forEach(component => walk(
+          component.getAttribute('objectid'),
+          multiplyTransforms(parseTransform(component.getAttribute('transform')), matrix),
+          color,
+          depth + 1
+        ));
+        return;
+      }
+      if (!meshEl) return;
+
+      const vertexEls = tags(meshEl, 'vertex');
+      const triangleEls = tags(meshEl, 'triangle');
+      if (vertexEls.length < 3 || !triangleEls.length) return;
+
+      const verts = new Float64Array(vertexEls.length * 3);
+      vertexEls.forEach((vertex, i) => {
+        const [x, y, z] = applyTransform(
+          matrix,
+          Number(vertex.getAttribute('x')) || 0,
+          Number(vertex.getAttribute('y')) || 0,
+          Number(vertex.getAttribute('z')) || 0
+        );
+        verts[i * 3] = x * unitScale;
+        verts[i * 3 + 1] = y * unitScale;
+        verts[i * 3 + 2] = z * unitScale;
+      });
+
+      const tris = new Uint32Array(triangleEls.length * 3);
+      triangleEls.forEach((triangle, t) => {
+        tris[t * 3] = Number(triangle.getAttribute('v1')) || 0;
+        tris[t * 3 + 1] = Number(triangle.getAttribute('v2')) || 0;
+        tris[t * 3 + 2] = Number(triangle.getAttribute('v3')) || 0;
+      });
+
+      meshes.push({ name: obj.getAttribute('name') || '', hex: color, verts, tris });
+    }
+
+    const items = tags(doc, 'item');
+    items.forEach(item => walk(
+      item.getAttribute('objectid'),
+      parseTransform(item.getAttribute('transform')),
+      null,
+      0
+    ));
+    // Un 3MF sin `build` util todavia describe geometria: se toman los
+    // objetos con malla que nadie referencia como componente.
+    if (!meshes.length) {
+      const usedAsComponent = new Set(
+        tags(doc, 'component').map(component => component.getAttribute('objectid'))
+      );
+      objectById.forEach((obj, id) => {
+        if (usedAsComponent.has(id)) return;
+        walk(id, IDENTITY, null, 0);
+      });
+    }
+    if (!meshes.length) throw new Error('El 3MF no trae mallas legibles.');
+    return meshes;
+  }
+
+  /* ── OBJ + MTL ────────────────────────────────────────────────────────
+     Los indices del OBJ son globales al archivo y empiezan en 1; los
+     negativos cuentan desde el final. Cada `g`/`o` abre una pieza y
+     `usemtl` le asigna el material, que el .mtl hermano traduce a color.
+  ─────────────────────────────────────────────────────────────────────── */
+  function extractOBJProject(objText) {
+    const begin = objText.indexOf(Exporter.OBJ_EMBED_BEGIN);
+    if (begin === -1) return null;
+    const end = objText.indexOf(Exporter.OBJ_EMBED_END, begin);
+    if (end === -1) return null;
+    const base64 = objText
+      .slice(begin + Exporter.OBJ_EMBED_BEGIN.length, end)
+      .split('\n')
+      .map(line => line.replace(/^\s*#\s?/, '').trim())
+      .join('');
+    if (!base64) return null;
+    try {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return parseEmbeddedProject(new TextDecoder().decode(bytes), 'OBJ');
+    } catch (err) {
+      console.warn('El proyecto incrustado en el OBJ no se pudo decodificar.', err);
+      return null;
+    }
+  }
+
+  function parseMTL(mtlText) {
+    const colors = new Map();
+    if (!mtlText) return colors;
+    let current = null;
+    mtlText.split(/\r?\n/).forEach(line => {
+      const parts = line.trim().split(/\s+/);
+      if (parts[0] === 'newmtl') { current = parts.slice(1).join(' '); return; }
+      if (parts[0] !== 'Kd' || !current) return;
+      const rgb = parts.slice(1, 4).map(Number);
+      if (rgb.length !== 3 || rgb.some(v => !Number.isFinite(v))) return;
+      const hex = rgb
+        .map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0'))
+        .join('');
+      colors.set(current, `#${hex}`);
+    });
+    return colors;
+  }
+
+  function readOBJ(objText, mtlText) {
+    const project = extractOBJProject(objText);
+    if (project) return { project, meshes: [] };
+
+    const materials = parseMTL(mtlText);
+    const positions = [];
+    const groups = [];
+    let current = null;
+
+    function openGroup(name) {
+      current = { name: name || '', hex: null, indices: [] };
+      groups.push(current);
+    }
+    function faceIndex(token) {
+      const raw = Number(token.split('/')[0]);
+      if (!Number.isFinite(raw) || raw === 0) return -1;
+      return raw > 0 ? raw - 1 : positions.length / 3 + raw;
+    }
+
+    objText.split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed[0] === '#') return;
+      const parts = trimmed.split(/\s+/);
+      switch (parts[0]) {
+        case 'v':
+          positions.push(Number(parts[1]) || 0, Number(parts[2]) || 0, Number(parts[3]) || 0);
+          break;
+        case 'g':
+        case 'o':
+          openGroup(parts.slice(1).join(' '));
+          break;
+        case 'usemtl':
+          if (!current) openGroup('');
+          current.hex = materials.get(parts.slice(1).join(' ')) || current.hex;
+          break;
+        case 'f': {
+          if (!current) openGroup('');
+          const idxs = parts.slice(1).map(faceIndex).filter(i => i >= 0);
+          // Abanico: un poligono de N lados entra como N-2 triangulos.
+          for (let i = 1; i + 1 < idxs.length; i++) {
+            current.indices.push(idxs[0], idxs[i], idxs[i + 1]);
+          }
+          break;
+        }
+      }
+    });
+
+    // Los vertices son globales al archivo: todas las piezas comparten el
+    // mismo buffer y cada una solo trae sus indices.
+    const verts = Float64Array.from(positions);
+    const meshes = groups
+      .filter(group => group.indices.length >= 3)
+      .map(group => ({
+        // El exportador colapsa los espacios del nombre a guion bajo porque
+        // en `g` el espacio separa nombres. Se deshace al volver.
+        name: group.name.replace(/_/g, ' ').trim(),
+        hex: group.hex,
+        verts,
+        tris: Uint32Array.from(group.indices),
+      }));
+    if (!meshes.length) throw new Error('El OBJ no trae caras legibles.');
+    return { project: null, meshes };
+  }
+
+  /* ── Malla → perfil 2D ────────────────────────────────────────────────
+     Union de los triangulos proyectados. Se descartan los degenerados
+     (toda pared vertical proyecta area cero) y se deduplican los que
+     coinciden en planta (las dos tapas de un prisma son la misma figura),
+     que baja a la mitad el trabajo de Clipper.
+  ─────────────────────────────────────────────────────────────────────── */
+  function footprintShapes(verts, tris) {
+    const shapes = [];
+    const seen = new Set();
+    const snap = value => Math.round(value * GRID);
+
+    for (let t = 0; t < tris.length; t += 3) {
+      const a = tris[t] * 3;
+      const b = tris[t + 1] * 3;
+      const c = tris[t + 2] * 3;
+      const ax = verts[a], ay = verts[a + 1];
+      const bx = verts[b], by = verts[b + 1];
+      const cx = verts[c], cy = verts[c + 1];
+      if (!Number.isFinite(ax) || !Number.isFinite(bx) || !Number.isFinite(cx)) continue;
+      const area2 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      if (Math.abs(area2) < MIN_TRI_AREA2) continue;
+
+      const key = [
+        `${snap(ax)},${snap(ay)}`,
+        `${snap(bx)},${snap(by)}`,
+        `${snap(cx)},${snap(cy)}`,
+      ].sort().join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const shape = new THREE.Shape();
+      shape.moveTo(ax, ay);
+      shape.lineTo(bx, by);
+      shape.lineTo(cx, cy);
+      shape.closePath();
+      shape.autoClose = true;
+      shapes.push(shape);
+    }
+    if (!shapes.length) return [];
+    return Solid2D.unionShapes(shapes);
+  }
+
+  function heightRange(verts, tris) {
+    let min = Infinity;
+    let max = -Infinity;
+    const seen = new Set();
+    for (let t = 0; t < tris.length; t++) {
+      const idx = tris[t];
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      const z = verts[idx * 3 + 2];
+      if (!Number.isFinite(z)) continue;
+      if (z < min) min = z;
+      if (z > max) max = z;
+    }
+    return Number.isFinite(min) ? { min, max } : { min: 0, max: 0 };
+  }
+
+  function pointsOf(pathLike) {
+    const out = pathLike.getPoints(96)
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+      .map(p => ({ x: p.x, y: p.y }));
+    if (out.length > 1) {
+      const first = out[0];
+      const last = out[out.length - 1];
+      if (Math.abs(first.x - last.x) < 1e-8 && Math.abs(first.y - last.y) < 1e-8) out.pop();
+    }
+    return out;
+  }
+
+  function serializedShape(pathLike) {
+    return { kind: 'polygon-v1', points: pointsOf(pathLike), holes: [] };
+  }
+
+  /* ── Mallas → snapshot de proyecto ────────────────────────────────────
+     Devuelve exactamente la estructura que consume hydrateProjectSnapshot,
+     asi la reconstruccion entra por el mismo camino que abrir un
+     .inkora3d y no duplica logica de restauracion.
+
+     Cada anillo exterior es un contorno raiz; cada hueco, un contorno hijo
+     (parentIdx + depth+1) referenciado en holeIdxs, que es como el resto
+     del programa expresa un hueco: makeShapeCCW no conserva shape.holes.
+  ─────────────────────────────────────────────────────────────────────── */
+  function meshesToSnapshot(meshes, filename) {
+    const contours = [];
+    const skipped = [];
+
+    meshes.forEach((mesh, meshIdx) => {
+      const fallbackName = `Pieza ${meshIdx + 1}`;
+      let shapes;
+      try { shapes = footprintShapes(mesh.verts, mesh.tris); }
+      catch (err) {
+        console.warn(`No se pudo reconstruir la pieza "${mesh.name || fallbackName}".`, err);
+        skipped.push(mesh.name || fallbackName);
+        return;
+      }
+      if (!shapes.length) { skipped.push(mesh.name || fallbackName); return; }
+
+      const { min, max } = heightRange(mesh.verts, mesh.tris);
+      const height = Math.max(max - min, 0.01);
+      const color = normalizeHex(mesh.hex) || null;
+
+      const rootIdxs = [];
+      const holeIdxs = [];
+      shapes.forEach(shape => {
+        const rootIdx = contours.length;
+        rootIdxs.push(rootIdx);
+        contours.push(baseContour(serializedShape(shape), 0, null, color));
+        (shape.holes || []).forEach(hole => {
+          holeIdxs.push(contours.length);
+          contours.push({
+            ...baseContour(serializedShape(hole), 1, rootIdx, color),
+            absorbed: true,
+          });
+        });
+      });
+
+      contours[rootIdxs[0]].pieceData = {
+        name: mesh.name || fallbackName,
+        nameAuto: false,
+        color: color || '#c8c8d0',
+        depth: height,
+        // El bisel no viaja en la malla: se recupera el perfil mas ancho,
+        // que es el original, pero los cantos vuelven rectos.
+        bevel: 0,
+        bevelSeg: 0,
+        holeIdxs,
+        solidIslandIdxs: [],
+        mergedSourceIdxs: rootIdxs.length > 1 ? rootIdxs : [],
+        sourceContourIdx: null,
+        visible: true,
+        tx: 0, ty: min, tz: 0,
+        rotY: 0, scale: 1,
+        baseX: 0, baseY: 0, baseZ: 0,
+      };
+    });
+
+    if (!contours.length) {
+      throw new Error('No se pudo reconstruir ninguna pieza del modelo.');
+    }
+    return {
+      snapshot: {
+        filename: filename || 'modelo',
+        groups: [],
+        _nextGroupId: 1,
+        selectedIdxs: [],
+        selectedFaces: [],
+        extrudeMode: 'separate',
+        panel: null,
+        contours,
+      },
+      skipped,
+    };
+  }
+
+  function baseContour(shape, depth, parentIdx, color) {
+    return {
+      shape,
+      offX: 0, offY: 0,
+      depth, parentIdx,
+      layer: '0',
+      color,
+      name: null,
+      elementId: null,
+      isVoid: false, voidKind: null, voidArea: 0, syntheticVoid: false,
+      sel2D: false,
+      extruded: true,
+      depthOverride: null,
+      absorbed: false,
+      isFakeContour: false,
+      sourceContourIdx: null,
+      panelHidden: false,
+      deleted: false,
+      linkedPieceIdx: null,
+      pieceData: null,
+    };
+  }
+
+  return { read3MF, readOBJ, meshesToSnapshot };
 })();
 
 
@@ -5415,6 +6095,7 @@ const History = (() => {
   let stack = [];          // [snapshot_0 ... snapshot_N]  (pasado → presente)
   let cursor = -1;         // índice del snapshot activo
   let _onChange = null;    // callback para actualizar botones
+  let _onEdit = null;      // callback de "el documento cambió" (marca sin guardar)
 
   /* ── Snapshot ────────────────────────────────────────
      Captura el estado lógico completo de la escena.
@@ -5497,6 +6178,11 @@ const History = (() => {
     if (stack.length > MAX) stack.shift();
     cursor = stack.length - 1;
     _onChange && _onChange();
+    // Un push es la definicion operativa de "el documento cambio": toda
+    // operacion que modifica el proyecto pasa por aca. Deshacer y rehacer
+    // tambien mueven el documento respecto de lo guardado, asi que avisan
+    // desde sus propias funciones.
+    _onEdit && _onEdit();
   }
 
   /* ── undo / redo ─────────────────────────────────────
@@ -5507,12 +6193,14 @@ const History = (() => {
     if (cursor <= 0) return null;
     cursor--;
     _onChange && _onChange();
+    _onEdit && _onEdit();
     return stack[cursor];
   }
   function redo() {
     if (cursor >= stack.length - 1) return null;
     cursor++;
     _onChange && _onChange();
+    _onEdit && _onEdit();
     return stack[cursor];
   }
 
@@ -5524,13 +6212,14 @@ const History = (() => {
     return `↩${cursor} ↪${stack.length - 1 - cursor}`;
   }
   function onChange(cb) { _onChange = cb; }
+  function onEdit(cb) { _onEdit = cb; }
 
   /* ── clear ───────────────────────────────────────────
      Llamar al cargar un DXF nuevo (reset total).
   ─────────────────────────────────────────────────────── */
   function clear() { stack = []; cursor = -1; _onChange && _onChange(); }
 
-  return { push, undo, redo, canUndo, canRedo, label, onChange, clear, snapshot };
+  return { push, undo, redo, canUndo, canRedo, label, onChange, onEdit, clear, snapshot };
 })();
 
 
@@ -6369,6 +7058,7 @@ const PanelUI = (() => {
     if (slicerBtn) slicerBtn.disabled=!State.pieces.length||!window.inkoraSlicer;
     document.getElementById('btn-clear').disabled=!State.contours.length;
     document.getElementById('btn-save-project').disabled=!State.contours.length;
+    document.getElementById('btn-save-as-project').disabled=!State.contours.length;
   }
   function updateModeBadge(){
     const badge=document.getElementById('mode-badge');
@@ -6880,6 +7570,14 @@ const PanelUI = (() => {
           const hole = snap.contours[holeIdx];
           if (!hole || hole.deleted || hole.parentIdx !== sourceIdx) return;
           if (Number(hole.depth) !== Number(source.depth) + 1) return;
+          /* Mismo criterio que absorbChildren al extruir (GEOMETRY_PIPELINE
+             §13): un anillo hijo con la misma area que su padre no encierra
+             una region interior, es la misma frontera vista desde el otro
+             lado. Restarlo deja la pieza sin material y la union 2D vacia.
+             `_holeIdxs` conserva esos indices aunque la extrusion original
+             los haya descartado, asi que la restauracion tiene que volver a
+             filtrarlos o reconstruye una pieza que nunca existio. */
+          if (!enclosesInterior(source.shape, hole.shape)) return;
           shape.holes.push(WindingUtils.makeHoleCW(hole.shape));
 
           snap.contours.forEach((island, islandIdx) => {
@@ -7236,11 +7934,86 @@ const PanelUI = (() => {
     };
   }
 
+  /* ── Supresor de "cambios sin guardar" ────────────────
+     Reconstruir la escena (abrir un proyecto, cambiar de pestaña, vaciar
+     el workspace) empuja al historial igual que una edicion, pero no es
+     una edicion del usuario: el documento queda idéntico a lo que hay en
+     disco. Estas reconstrucciones corren dentro de withoutDirty() y cada
+     flujo decide despues si el proyecto nace limpio o sucio.
+  ─────────────────────────────────────────────────────── */
+  let _dirtySuppress = 0;
+  function withoutDirty(fn) {
+    _dirtySuppress++;
+    try { return fn(); }
+    finally { _dirtySuppress--; }
+  }
+
+  /* ── Pregunta de cambios sin guardar ──────────────────
+     Devuelve 'save' | 'discard' | 'cancel'. La usan tanto cerrar una
+     pestaña como cerrar el programa, para que la decision sea siempre
+     la misma y con las mismas tres salidas.
+  ─────────────────────────────────────────────────────── */
+  function confirmDiscardOrSave(name) {
+    return new Promise(resolve => {
+      const modal = document.getElementById('unsaved-modal');
+      const text = document.getElementById('unsaved-text');
+      const saveBtn = document.getElementById('unsaved-save');
+      const discardBtn = document.getElementById('unsaved-discard');
+      const cancelBtn = document.getElementById('unsaved-cancel');
+      if (!modal) { resolve('discard'); return; }
+
+      text.textContent =
+        `“${name || 'Sin título'}” tiene cambios sin guardar. ` +
+        'Si los descartás no se pueden recuperar.';
+      modal.style.display = 'flex';
+      saveBtn.focus();
+
+      // Capture: el atajo global de Escape no debe ganarle a este diálogo.
+      function onKey(e) {
+        if (e.key !== 'Escape') return;
+        e.preventDefault(); e.stopPropagation();
+        finish('cancel');
+      }
+      function finish(decision) {
+        modal.style.display = 'none';
+        document.removeEventListener('keydown', onKey, true);
+        saveBtn.onclick = discardBtn.onclick = cancelBtn.onclick = null;
+        resolve(decision);
+      }
+      saveBtn.onclick = () => finish('save');
+      discardBtn.onclick = () => finish('discard');
+      cancelBtn.onclick = () => finish('cancel');
+      document.addEventListener('keydown', onKey, true);
+    });
+  }
+
+  /* Recorre todas las pestañas con cambios pendientes, una por una, y
+     muestra cada una antes de preguntar por ella. Devuelve false en cuanto
+     el usuario cancela: quien llama debe abortar el cierre. */
+  async function confirmSafeToClose() {
+    for (let guard = 0; guard < 200; guard++) {
+      const pending = ProjectTabs.unsavedTabs();
+      if (!pending.length) return true;
+      const tab = pending[0];
+      ProjectTabs.switchTo(tab.id);
+      const decision = await confirmDiscardOrSave(tab.name);
+      if (decision === 'cancel') return false;
+      if (decision === 'save') {
+        if (!await saveProjectSafely()) return false;
+      } else {
+        ProjectTabs.markSaved(); // descartar: el trabajo se pierde a propósito
+      }
+    }
+    return false;
+  }
+
   function loadSnapshotIntoState(snap) {
-    History.clear();
-    restoreSnapshot(snap);
-    History.push(State);
-    Viewport.focusAll();
+    withoutDirty(() => {
+      History.clear();
+      restoreSnapshot(snap);
+      History.push(State);
+      Viewport.focusAll();
+    });
   }
 
   async function verifyFileHandlePermission(handle, mode = 'read') {
@@ -7297,8 +8070,11 @@ const PanelUI = (() => {
     return null;
   }
 
-  async function saveProject() {
-    const payload = {
+  /* El mismo payload que se escribe al .inkora3d viaja incrustado dentro del
+     3MF y del OBJ exportados. Una sola funcion para los tres destinos: si el
+     formato cambia, cambia en todos a la vez. */
+  function buildProjectPayload() {
+    return {
       app: 'INKORA 3D Modeler',
       appVersion: APP_VERSION,
       format: 'inkora3d-project',
@@ -7306,19 +8082,45 @@ const PanelUI = (() => {
       savedAt: new Date().toISOString(),
       snapshot: buildProjectSnapshot(),
     };
-    const blob = new Blob([JSON.stringify(payload)], { type: 'application/json;charset=utf-8' });
+  }
+
+  /* saveAs = true fuerza el dialogo de ubicacion aunque la pestaña ya tenga
+     archivo asociado. Devuelve true si el proyecto quedo escrito en disco,
+     false si el usuario cancelo — el aviso de cierre necesita distinguirlos
+     para no cerrar despues de un "Cancelar". */
+  async function saveProject({ saveAs = false } = {}) {
+    const blob = new Blob([JSON.stringify(buildProjectPayload())], {
+      type: 'application/json;charset=utf-8',
+    });
     const activeTab = ProjectTabs.getActiveTab();
     const safeName = sanitizeLocalFileName(State.filename || activeTab?.name || 'inkora-project', '.inkora3d');
 
-    const result = await saveBlobToDisk(blob, safeName, activeTab?.fileHandle || null);
-    if (result === 'cancelled') return; // el usuario cerró el diálogo: sin toast, sin tocar nada
+    const result = await saveBlobToDisk(blob, safeName, saveAs ? null : (activeTab?.fileHandle || null));
+    if (result === 'cancelled') return false; // el usuario cerró el diálogo: sin toast, sin tocar nada
     if (result) {
       State.filename = projectTitleFromName(result.name);
       const recentId = await RecentProjects.upsertHandle(result, result.name);
       ProjectTabs.attachFileHandle(result, recentId, State.filename);
     }
+    ProjectTabs.markSaved();
     ProjectTabs.syncActiveFromState();
     Utils.toast('Proyecto guardado correctamente.', 'ok');
+    return true;
+  }
+
+  /* Guardar sin que un error rompa el flujo que lo pidio (cerrar pestaña,
+     cerrar programa). Devuelve si el proyecto quedo escrito. */
+  async function saveProjectSafely(options = {}) {
+    if (!State.contours.length) {
+      Utils.toast('No hay proyecto para guardar.', 'err');
+      return false;
+    }
+    try { return await saveProject(options); }
+    catch (err) {
+      Utils.toast('Error al guardar: ' + err.message, 'err');
+      console.error(err);
+      return false;
+    }
   }
 
   async function loadProjectFile(file, fileHandle = null) {
@@ -7355,6 +8157,25 @@ const PanelUI = (() => {
       }
     }
     document.getElementById('project-input').click();
+  }
+
+  /* Coloca un panel desplegable debajo de su botón. Los paneles del header
+     son `position:fixed` porque el header recorta (tiene scroll horizontal),
+     así que la posición se calcula acá y se recalcula al redimensionar o
+     scrollear el header. Mismo criterio que attachPresetDropdown. */
+  function positionPanelUnder(anchorId, panelId, align = 'left') {
+    const anchor = document.getElementById(anchorId);
+    const panel = document.getElementById(panelId);
+    if (!anchor || !panel) return;
+    const rect = anchor.getBoundingClientRect();
+    const gap = 7;
+    const pad = 8;
+    const width = panel.offsetWidth || 272;
+    const height = panel.offsetHeight || 200;
+    const wanted = align === 'right' ? rect.right - width : rect.left;
+    panel.style.left = `${Utils.clamp(wanted, pad, Math.max(pad, window.innerWidth - width - pad))}px`;
+    const below = rect.bottom + gap;
+    panel.style.top = `${below + height <= window.innerHeight - pad ? below : Math.max(pad, rect.top - height - gap)}px`;
   }
 
   /* ── RecentProjects ──────────────────────────────────
@@ -7509,15 +8330,24 @@ const PanelUI = (() => {
       });
     }
 
-    function openPanel() { document.getElementById('recent-panel')?.classList.add('open'); render(); }
+    function openPanel() {
+      document.getElementById('recent-panel')?.classList.add('open');
+      positionPanelUnder('btn-file-menu', 'recent-panel');
+      render();
+    }
     function closePanel() { document.getElementById('recent-panel')?.classList.remove('open'); }
+    function reposition() {
+      if (document.getElementById('recent-panel')?.classList.contains('open')) {
+        positionPanelUnder('btn-file-menu', 'recent-panel');
+      }
+    }
     function togglePanel() {
       const p = document.getElementById('recent-panel');
       if (!p) return;
       if (p.classList.contains('open')) closePanel(); else openPanel();
     }
 
-    return { upsertHandle, render, togglePanel, closePanel, openRecent };
+    return { upsertHandle, render, togglePanel, closePanel, openRecent, reposition };
   })();
 
   /* ── ProjectTabs ──────────────────────────────────────
@@ -7541,6 +8371,48 @@ const PanelUI = (() => {
     function activeTab() { return tabs.find(t => t.id === activeId) || null; }
     function cleanTitle(name) { return projectTitleFromName(name || 'Sin título'); }
     function currentIsBlank() { return !State.contours.length && !State.pieces.length; }
+    function newTab(name = 'Sin título') {
+      return {
+        id: newId(), name: cleanTitle(name),
+        snapshot: null, fileHandle: null, recentId: null,
+        dirty: false,
+      };
+    }
+
+    /* ── Cambios sin guardar ──────────────────────────────
+       El flag vive en la pestaña, no en State: cada proyecto abierto
+       tiene su propio estado respecto de su archivo. Un proyecto
+       importado (DXF, SVG, 3MF, OBJ) nace sucio a proposito — todavia
+       no existe como .inkora3d en ningun lado.
+    ─────────────────────────────────────────────────────── */
+    function markDirty() {
+      if (_dirtySuppress) return;
+      const tab = activeTab();
+      if (!tab || tab.dirty) return;
+      tab.dirty = true;
+      render();
+      syncWindowTitle();
+    }
+    function markSaved() {
+      const tab = activeTab();
+      if (!tab || !tab.dirty) return;
+      tab.dirty = false;
+      render();
+      syncWindowTitle();
+    }
+    function isDirty() { return !!activeTab()?.dirty; }
+    function hasFile() { return !!activeTab()?.fileHandle; }
+    function unsavedTabs() { return tabs.filter(t => t.dirty); }
+    function activeName() { return cleanTitle(activeTab()?.name || State.filename || 'Sin título'); }
+
+    // El titulo de la ventana es lo unico que ve el usuario cuando la app
+    // esta minimizada o en la barra de tareas; ahi tambien va el asterisco.
+    function syncWindowTitle() {
+      const tab = activeTab();
+      const base = `INKORA 3D Modeler v${APP_VERSION}`;
+      if (!tab) { document.title = base; return; }
+      document.title = `${tab.dirty ? '*' : ''}${tab.name || 'Sin título'} — ${base}`;
+    }
 
     function captureActive() {
       const tab = activeTab();
@@ -7555,11 +8427,15 @@ const PanelUI = (() => {
       wrap.innerHTML = '';
       tabs.forEach(tab => {
         const el = document.createElement('div');
-        el.className = 'project-tab' + (tab.id === activeId ? ' active' : '');
-        el.title = tab.fileHandle?.name || tab.name || 'Sin título';
+        el.className = 'project-tab' + (tab.id === activeId ? ' active' : '') +
+          (tab.dirty ? ' dirty' : '');
+        const fileLabel = tab.fileHandle?.name || tab.name || 'Sin título';
+        el.title = tab.dirty
+          ? `${fileLabel} — con cambios sin guardar (Ctrl+S)`
+          : fileLabel;
         const title = document.createElement('span');
         title.className = 'project-tab-title';
-        title.textContent = tab.name || 'Sin título';
+        title.textContent = (tab.dirty ? '*' : '') + (tab.name || 'Sin título');
         const close = document.createElement('span');
         close.className = 'project-tab-close';
         close.textContent = '×';
@@ -7578,19 +8454,21 @@ const PanelUI = (() => {
     }
 
     function clearWorkspace(name = 'Sin título') {
-      TransformModule.deselect(); TransformModule.hidePanel();
-      History.clear();
-      PanelUI.clearAllSelection();
-      Viewport.clearAll();
-      State.reset();
-      GeoModule.resetCounter();
-      State.filename = cleanTitle(name);
-      PanelUI.refreshContourVisuals();
-      PanelUI.renderList();
-      PanelUI.updateModeBadge();
-      PanelUI.updateButtons();
-      PanelUI.updateColorPanel();
-      History.push(State);
+      withoutDirty(() => {
+        TransformModule.deselect(); TransformModule.hidePanel();
+        History.clear();
+        PanelUI.clearAllSelection();
+        Viewport.clearAll();
+        State.reset();
+        GeoModule.resetCounter();
+        State.filename = cleanTitle(name);
+        PanelUI.refreshContourVisuals();
+        PanelUI.renderList();
+        PanelUI.updateModeBadge();
+        PanelUI.updateButtons();
+        PanelUI.updateColorPanel();
+        History.push(State);
+      });
     }
 
     function loadTab(tab) {
@@ -7605,21 +8483,40 @@ const PanelUI = (() => {
 
     function init() {
       if (tabs.length) return;
-      const tab = { id: newId(), name: 'Sin título', snapshot: null, fileHandle: null, recentId: null };
+      const tab = newTab();
       tabs.push(tab);
       activeId = tab.id;
       clearWorkspace(tab.name);
       render();
+      syncWindowTitle();
     }
 
-    function createBlank(name = 'Sin título') {
+    function createBlank(name = 'Sin título', { silent = false } = {}) {
       captureActive();
-      const tab = { id: newId(), name: cleanTitle(name), snapshot: null, fileHandle: null, recentId: null };
+      const tab = newTab(name);
       tabs.push(tab);
       activeId = tab.id;
       clearWorkspace(tab.name);
       render();
-      Utils.toast('Nueva pestaña de proyecto.', 'ok', 1200);
+      syncWindowTitle();
+      if (!silent) Utils.toast('Nueva pestaña de proyecto.', 'ok', 1200);
+      return tab;
+    }
+
+    /* Importar es abrir un proyecto nuevo, no pisar el que hay: si la
+       pestaña activa ya tiene contenido se abre otra, igual que al abrir
+       un .inkora3d. La pestaña vacia inicial si se reusa, para que la
+       primera importacion de la sesion no deje una pestaña muerta. */
+    function prepareForImport(name) {
+      const tab = activeTab();
+      if (tab && currentIsBlank() && !tab.snapshot) {
+        tab.name = cleanTitle(name);
+        tab.fileHandle = null;
+        tab.recentId = null;
+        render();
+        return tab;
+      }
+      return createBlank(name, { silent: true });
     }
 
     function switchTo(id) {
@@ -7630,15 +8527,30 @@ const PanelUI = (() => {
       activeId = id;
       loadTab(tab);
       render();
+      syncWindowTitle();
     }
 
-    function closeTab(id) {
+    /* Cerrar una pestaña con cambios sin guardar es perder trabajo igual que
+       cerrar el programa: se pregunta con el mismo dialogo, y "Guardar"
+       puede terminar abriendo el explorador si nunca se guardo. */
+    async function closeTab(id) {
+      const target = tabs.find(t => t.id === id);
+      if (target?.dirty) {
+        const wasActive = id === activeId;
+        if (!wasActive) { captureActive(); activeId = id; loadTab(target); render(); }
+        const decision = await confirmDiscardOrSave(target.name);
+        if (decision === 'cancel') { if (!wasActive) render(); return; }
+        if (decision === 'save' && !(await saveProjectSafely())) return;
+        target.dirty = false;
+      }
       if (tabs.length <= 1) {
         const tab = activeTab();
         if (tab) {
-          tab.name = 'Sin título'; tab.snapshot = null; tab.fileHandle = null; tab.recentId = null;
+          tab.name = 'Sin título'; tab.snapshot = null; tab.fileHandle = null;
+          tab.recentId = null; tab.dirty = false;
           clearWorkspace(tab.name);
           render();
+          syncWindowTitle();
         }
         return;
       }
@@ -7652,6 +8564,7 @@ const PanelUI = (() => {
         loadTab(next);
       }
       render();
+      syncWindowTitle();
     }
 
     function openProjectSnapshot(snap, meta = {}) {
@@ -7659,7 +8572,7 @@ const PanelUI = (() => {
       let tab = activeTab();
       const useCurrent = tab && currentIsBlank() && !tab.snapshot;
       if (!useCurrent) {
-        tab = { id: newId(), name: cleanTitle(meta.name || snap.filename), snapshot: null, fileHandle: null, recentId: null };
+        tab = newTab(meta.name || snap.filename);
         tabs.push(tab);
       }
       activeId = tab.id;
@@ -7669,7 +8582,12 @@ const PanelUI = (() => {
       loadSnapshotIntoState(snap);
       tab.snapshot = buildProjectSnapshot();
       tab.name = cleanTitle(State.filename || tab.name);
+      // Abierto desde un .inkora3d: lo que hay en pantalla es exactamente lo
+      // que hay en disco. Reconstruido desde una malla: todavia no existe
+      // como proyecto, asi que nace sucio.
+      tab.dirty = !!meta.dirty;
       render();
+      syncWindowTitle();
     }
 
     function syncActiveFromState() {
@@ -7678,6 +8596,7 @@ const PanelUI = (() => {
       tab.name = cleanTitle(State.filename || tab.name || 'Sin título');
       tab.snapshot = State.contours.length ? buildProjectSnapshot() : null;
       render();
+      syncWindowTitle();
     }
 
     function attachFileHandle(handle, recentId, name = null) {
@@ -7689,21 +8608,119 @@ const PanelUI = (() => {
       render();
     }
 
-    return { init, createBlank, switchTo, closeTab, openProjectSnapshot, syncActiveFromState, attachFileHandle, getActiveTab: activeTab, captureActive };
+    return {
+      init, createBlank, prepareForImport, switchTo, closeTab, openProjectSnapshot,
+      syncActiveFromState, attachFileHandle, getActiveTab: activeTab, captureActive,
+      markDirty, markSaved, isDirty, hasFile, unsavedTabs, activeName, syncWindowTitle,
+    };
   })();
 
-  document.getElementById('btn-save-project').addEventListener('click', async () => {
-    if (!State.contours.length) { Utils.toast('No hay proyecto para guardar.', 'err'); return; }
-    try { await saveProject(); }
-    catch (err) { Utils.toast('Error al guardar: ' + err.message, 'err'); console.error(err); }
+  // Toda edicion del usuario pasa por el historial; el historial avisa aca.
+  History.onEdit(() => ProjectTabs.markDirty());
+
+  /* ── Menú Archivo ─────────────────────────────────────
+     Un solo desplegable para todo lo que es "el proyecto como archivo".
+     Cada ítem cierra el menú antes de actuar: si la acción abre un
+     diálogo del sistema, el menú no puede quedar flotando arriba.
+  ─────────────────────────────────────────────────────── */
+  const FileMenu = (() => {
+    const wrap = document.getElementById('file-menu-wrap');
+    const button = document.getElementById('btn-file-menu');
+    const panel = document.getElementById('file-menu');
+
+    function close() {
+      panel.classList.remove('open');
+      button.setAttribute('aria-expanded', 'false');
+    }
+    function toggle() {
+      const open = !panel.classList.contains('open');
+      panel.classList.toggle('open', open);
+      button.setAttribute('aria-expanded', String(open));
+      if (open) { RecentProjects.closePanel(); reposition(); }
+    }
+    function reposition() {
+      if (panel.classList.contains('open')) positionPanelUnder('btn-file-menu', 'file-menu');
+    }
+    function onItem(id, handler) {
+      document.getElementById(id).addEventListener('click', e => {
+        e.stopPropagation();
+        close();
+        handler(e);
+      });
+    }
+
+    button.addEventListener('click', e => { e.stopPropagation(); toggle(); });
+    document.addEventListener('click', e => {
+      if (!wrap.contains(e.target)) { close(); RecentProjects.closePanel(); }
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { close(); RecentProjects.closePanel(); }
+    });
+    // Paneles fijos: si la ventana cambia de tamaño o el header scrollea,
+    // hay que recalcular o quedan despegados del botón.
+    window.addEventListener('resize', () => { reposition(); RecentProjects.reposition(); });
+    document.getElementById('header')?.addEventListener('scroll', () => {
+      reposition(); RecentProjects.reposition();
+    });
+
+    return { close, onItem };
+  })();
+
+  FileMenu.onItem('btn-new-project-menu', () => ProjectTabs.createBlank());
+  FileMenu.onItem('btn-open-project', openProjectWithPicker);
+  FileMenu.onItem('btn-save-project', () => saveProjectSafely());
+  FileMenu.onItem('btn-save-as-project', () => saveProjectSafely({ saveAs: true }));
+  FileMenu.onItem('btn-import', () => document.getElementById('file-input').click());
+
+  // Recientes no cierra el menú: abre su propio panel colgado del botón
+  // Archivo, para poder volver al menú sin perder el lugar.
+  document.getElementById('btn-recent-projects').addEventListener('click', e => {
+    e.stopPropagation();
+    FileMenu.close();
+    RecentProjects.togglePanel();
   });
-  document.getElementById('btn-open-project').addEventListener('click', openProjectWithPicker);
   document.getElementById('btn-new-project').addEventListener('click', () => ProjectTabs.createBlank());
-  document.getElementById('btn-recent-projects').addEventListener('click', e => { e.stopPropagation(); RecentProjects.togglePanel(); });
-  document.addEventListener('click', e => {
-    const rw = document.getElementById('recent-wrap');
-    if (rw && !rw.contains(e.target)) RecentProjects.closePanel();
-  });
+
+  /* ── Aviso al cerrar con cambios sin guardar ──────────
+     En Electron el proceso principal frena el cierre y nos pregunta: se
+     puede mostrar el diálogo propio (Guardar / Descartar / Cancelar),
+     esperar a que el archivo se escriba y recién ahí cerrar.
+
+     En el navegador eso no existe. `beforeunload` es síncrono, no da
+     tiempo a escribir un archivo, y abrir el selector de guardado exige
+     un gesto del usuario que ya no hay. Lo único posible es el aviso
+     genérico del navegador: avisa que se pierden cambios, no ofrece
+     guardarlos. Es la misma limitación que tiene cualquier app web.
+  ─────────────────────────────────────────────────────── */
+  (() => {
+    if (window.inkoraWindow?.onCloseRequest) {
+      window.inkoraWindow.onCloseRequest(async () => {
+        const safe = await confirmSafeToClose();
+        if (safe) window.inkoraWindow.confirmClose();
+      });
+      return;
+    }
+    window.addEventListener('beforeunload', e => {
+      if (!ProjectTabs.unsavedTabs().length) return;
+      e.preventDefault();
+      e.returnValue = ''; // Chrome exige asignar returnValue para mostrarlo
+    });
+  })();
+
+  // La tarjeta de actualización vive en otro script (fuera de App): reiniciar
+  // para instalar también cierra la app, así que necesita la misma pregunta.
+  window.inkoraConfirmSafeToClose = confirmSafeToClose;
+
+  /* Costura del proyecto hacia afuera del controlador. La usa la regresión
+     para exportar con proyecto incrustado y volver a importarlo sin pasar
+     por el diálogo de archivos, que es el contrato que hace que un 3MF o un
+     OBJ de INKORA vuelvan editables. */
+  window.inkoraProject = {
+    buildPayload: buildProjectPayload,
+    // Mismo camino que usa loadModelFile: hidratar y abrir como proyecto.
+    open: (rawSnapshot, meta = {}) =>
+      ProjectTabs.openProjectSnapshot(hydrateProjectSnapshot(rawSnapshot), meta),
+  };
   document.getElementById('project-input').addEventListener('change', async e => {
     const f = e.target.files[0];
     if (f) { await loadProjectFile(f); e.target.value = ''; }
@@ -7731,7 +8748,8 @@ const PanelUI = (() => {
      exportar/importar config como JSON, múltiples keymaps.
      ══════════════════════════════════════════════════════ */
   const KeyboardModule = (() => {
-    const LS_KEY = 'inkora_shortcuts_v1';
+    const LS_KEY = 'inkora_shortcuts_v2';
+    const LEGACY_LS_KEY = 'inkora_shortcuts_v1';
 
     /* ── Definición de atajos (valores por defecto) ─── */
     const DEFAULTS = [
@@ -7755,29 +8773,67 @@ const PanelUI = (() => {
       { id:'undo',        group:'Historial',  desc:'Deshacer',                   key:'z',         ctrl:true,  shift:false, alt:false },
       { id:'redo',        group:'Historial',  desc:'Rehacer',                    key:'z',         ctrl:true,  shift:true,  alt:false },
       // Grupos
-      { id:'group',       group:'Grupos',     desc:'Agrupar selección',           key:'g',         ctrl:true,  shift:false, alt:false },
+      // Agrupar dejó Ctrl+G libre para Guardar (ver migración del keymap).
+      { id:'group',       group:'Grupos',     desc:'Agrupar selección',           key:'g',         ctrl:false, shift:false, alt:false },
       { id:'ungroup',     group:'Grupos',     desc:'Desagrupar',                  key:'u',         ctrl:true,  shift:false, alt:false },
       // Archivo
-      { id:'import',      group:'Archivo',    desc:'Importar DXF',               key:'i',         ctrl:true,  shift:false, alt:false },
+      { id:'import',      group:'Archivo',    desc:'Importar DXF/SVG/3MF/OBJ',   key:'i',         ctrl:true,  shift:false, alt:false },
       { id:'openProject', group:'Archivo',    desc:'Abrir proyecto',             key:'o',         ctrl:true,  shift:false, alt:false },
-      { id:'saveProject', group:'Archivo',    desc:'Guardar proyecto',           key:'s',         ctrl:true,  shift:false, alt:false },
+      { id:'saveProject', group:'Archivo',    desc:'Guardar proyecto',           key:'s',         ctrl:true,  shift:false, alt:false,
+        extra:{ key:'g', ctrl:true, shift:false, alt:false } },
+      { id:'saveProjectAs',group:'Archivo',   desc:'Guardar proyecto como…',     key:'s',         ctrl:true,  shift:true,  alt:false,
+        extra:{ key:'g', ctrl:true, shift:true,  alt:false } },
       { id:'export',      group:'Archivo',    desc:'Exportar (formato elegido)', key:'e',         ctrl:true,  shift:false, alt:false },
       { id:'openSlicer',  group:'Archivo',    desc:'Abrir en laminador elegido', key:'o',         ctrl:true,  shift:true,  alt:false },
     ];
+
+    /* Guardar y Guardar como tienen dos combinaciones cada uno. La segunda
+       (`extra`) es fija: no se edita ni se persiste, viaja en DEFAULTS. Solo
+       la principal es reasignable, que es la que muestra el editor. */
+    const RESERVED_COMBOS = [
+      { key:'s', ctrl:true, shift:false, alt:false },
+      { key:'g', ctrl:true, shift:false, alt:false },
+      { key:'s', ctrl:true, shift:true,  alt:false },
+      { key:'g', ctrl:true, shift:true,  alt:false },
+    ];
+    const SAVE_IDS = new Set(['saveProject', 'saveProjectAs']);
 
     /* ── Estado ─────────────────────────────────────── */
     let shortcuts = loadFromStorage();
     let _editMode = false;
     let _recordingId = null; // id del atajo que está grabando
 
+    function sameCombo(a, b) {
+      return !!a && !!b && !!a.key && a.key.toLowerCase() === b.key.toLowerCase() &&
+        !!a.ctrl === !!b.ctrl && !!a.shift === !!b.shift && !!a.alt === !!b.alt;
+    }
+
+    /* Migración v1 → v2. En v1, Ctrl+G era "Agrupar selección"; ahora las
+       cuatro combinaciones de guardado son de Guardar. Un keymap viejo que
+       ocupe alguna de ellas pierde ESE atajo y vuelve a su default nuevo —
+       el resto de las personalizaciones se conservan. */
+    function migrateLegacy(saved) {
+      return saved.filter(entry => {
+        if (SAVE_IDS.has(entry.id)) return true;
+        if (!RESERVED_COMBOS.some(combo => sameCombo(entry, combo))) return true;
+        console.info(`Atajo "${entry.id}" liberado: su combinación pasó a Guardar.`);
+        return false;
+      });
+    }
+
     function loadFromStorage() {
       try {
-        const saved = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+        let saved = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+        if (!saved) {
+          const legacy = JSON.parse(localStorage.getItem(LEGACY_LS_KEY) || 'null');
+          saved = Array.isArray(legacy) ? migrateLegacy(legacy) : null;
+        }
         if (!saved) return DEFAULTS.map(d => ({ ...d }));
         // Merge: atajos nuevos en DEFAULTS que no estén en saved se añaden
         const merged = DEFAULTS.map(d => {
           const found = saved.find(s => s.id === d.id);
-          return found ? { ...d, ...found } : { ...d };
+          // `extra` nunca viene de storage: es parte de la definición.
+          return found ? { ...d, ...found, extra: d.extra } : { ...d };
         });
         return merged;
       } catch { return DEFAULTS.map(d => ({ ...d })); }
@@ -7831,17 +8887,29 @@ const PanelUI = (() => {
       // Key display
       const keySpan = document.createElement('span');
       keySpan.className = 'sc-key';
-      fmtKey(sc).forEach((part, i, arr) => {
-        const k = document.createElement('kbd');
-        k.textContent = part;
-        if (i < arr.length - 1) k.classList.add('mod');
-        keySpan.appendChild(k);
-        if (i < arr.length - 1) {
-          const plus = document.createElement('span');
-          plus.textContent = '+'; plus.style.cssText = 'color:var(--text-dim);font-size:10px';
-          keySpan.appendChild(plus);
-        }
-      });
+      function appendCombo(combo) {
+        fmtKey(combo).forEach((part, i, arr) => {
+          const k = document.createElement('kbd');
+          k.textContent = part;
+          if (i < arr.length - 1) k.classList.add('mod');
+          keySpan.appendChild(k);
+          if (i < arr.length - 1) {
+            const plus = document.createElement('span');
+            plus.textContent = '+'; plus.style.cssText = 'color:var(--text-dim);font-size:10px';
+            keySpan.appendChild(plus);
+          }
+        });
+      }
+      appendCombo(sc);
+      // Segunda combinación fija (Guardar / Guardar como): se muestra, pero
+      // el editor solo graba la principal.
+      if (sc.extra?.key) {
+        const or = document.createElement('span');
+        or.textContent = 'o';
+        or.style.cssText = 'color:var(--text-faint);font-size:9px;margin:0 3px';
+        keySpan.appendChild(or);
+        appendCombo(sc.extra);
+      }
 
       // Key input (edit mode)
       const input = document.createElement('input');
@@ -7877,9 +8945,13 @@ const PanelUI = (() => {
 
       const sc = shortcuts.find(s => s.id === _recordingId);
       if (!sc) return;
-      const conflict = shortcuts.find(s => s.id !== sc.id &&
-        s.key.toLowerCase() === e.key.toLowerCase() &&
-        s.ctrl === e.ctrlKey && s.shift === e.shiftKey && s.alt === e.altKey);
+      // Chocar con la combinación fija de Guardar es legal: la principal
+      // gana en resolve(), y avisamos para que no sorprenda.
+      const shadowed = shortcuts.find(s => s.id !== sc.id && matchesEvent(s.extra, e));
+      if (shadowed) {
+        Utils.toast(`Esa combinación deja de servir para: ${shadowed.desc}`, 'ok', 2600);
+      }
+      const conflict = shortcuts.find(s => s.id !== sc.id && matchesEvent(s, e));
       if (conflict) {
         conflict.key = '';
         conflict.ctrl = conflict.shift = conflict.alt = false;
@@ -7917,14 +8989,20 @@ const PanelUI = (() => {
       renderList();
     }
 
-    /* ── Resolver acción por evento ──────────────────── */
+    /* ── Resolver acción por evento ────────────────────
+       Las combinaciones principales ganan sobre las alternativas: si el
+       usuario reasigna un atajo a Ctrl+G, ese gana sobre el Ctrl+G fijo
+       de Guardar. */
+    function matchesEvent(combo, e) {
+      return !!combo && !!combo.key &&
+        combo.key.toLowerCase() === e.key.toLowerCase() &&
+        !!combo.ctrl  === e.ctrlKey &&
+        !!combo.shift === e.shiftKey &&
+        !!combo.alt   === e.altKey;
+    }
     function resolve(e) {
-      return shortcuts.find(sc =>
-        sc.key && sc.key.toLowerCase() === e.key.toLowerCase() &&
-        sc.ctrl  === e.ctrlKey &&
-        sc.shift === e.shiftKey &&
-        sc.alt   === e.altKey
-      );
+      return shortcuts.find(sc => matchesEvent(sc, e)) ||
+             shortcuts.find(sc => matchesEvent(sc.extra, e));
     }
 
     /* ── Acciones ────────────────────────────────────── */
@@ -8243,8 +9321,15 @@ const PanelUI = (() => {
           openProjectWithPicker();
           break;
 
+        // Sin archivo asociado, Guardar se comporta como Guardar como:
+        // saveBlobToDisk ya pide ubicación cuando no hay handle, con el
+        // nombre del diseño importado precargado.
         case 'saveProject':
-          if (State.contours.length) document.getElementById('btn-save-project').click();
+          saveProjectSafely();
+          break;
+
+        case 'saveProjectAs':
+          saveProjectSafely({ saveAs: true });
           break;
 
         case 'export':
@@ -8303,11 +9388,19 @@ const PanelUI = (() => {
 
       const btn = document.getElementById('btn-shortcuts');
       const panel = document.getElementById('shortcuts-panel');
+      function reposition() {
+        if (panel.classList.contains('open')) {
+          positionPanelUnder('btn-shortcuts', 'shortcuts-panel', 'right');
+        }
+      }
       btn.addEventListener('click', e => {
         e.stopPropagation();
         panel.classList.toggle('open');
+        reposition();
         if (!panel.classList.contains('open') && _editMode) setEditMode(false);
       });
+      window.addEventListener('resize', reposition);
+      document.getElementById('header')?.addEventListener('scroll', reposition);
       document.addEventListener('click', e => {
         if (!document.getElementById('shortcuts-wrap').contains(e.target)) {
           panel.classList.remove('open');
@@ -8465,10 +9558,11 @@ const PanelUI = (() => {
   // Hover → resaltar fila en panel lateral
   Viewport.onHoverMesh(hit=>PanelUI.highlightRow(hit));
 
-  document.getElementById('btn-import').addEventListener('click',()=>document.getElementById('file-input').click());
+  // btn-import ya lo cablea FileMenu (cierra el menú antes de abrir el
+  // diálogo del sistema); acá solo queda la respuesta a la selección.
   document.getElementById('file-input').addEventListener('change',async e=>{
-    const f=e.target.files[0];
-    if(f){await loadDXF(f);e.target.value='';}
+    // multiple: un OBJ necesita que su .mtl entre en la misma seleccion.
+    if(e.target.files.length){await importAnyFiles(e.target.files);e.target.value='';}
   });
 
   const vpWrap=document.getElementById('vp-wrap');
@@ -8645,9 +9739,9 @@ const PanelUI = (() => {
   vpWrap.addEventListener('dragleave',e=>{if(!vpWrap.contains(e.relatedTarget))overlay.classList.remove('active');});
   vpWrap.addEventListener('drop',async e=>{
     e.preventDefault();overlay.classList.remove('active');
-    const f=[...e.dataTransfer.files].find(f=>/\.(dxf|svg)$/i.test(f.name));
-    if(f)await loadDXF(f);
-    else Utils.toast('Solo se aceptan archivos .dxf o .svg','err');
+    // Soltar el .obj y su .mtl juntos es la unica forma de que el modelo
+    // entre con sus colores desde el navegador.
+    await importAnyFiles(e.dataTransfer.files);
   });
 
   // populateShapeData: arma la escena (State.contours + meshes 2D) a partir
@@ -8655,6 +9749,9 @@ const PanelUI = (() => {
   // arrastrado/elegido, drag&drop, y texto pegado (Ctrl+V), así ningún
   // camino de importación duplica esta lógica.
   function populateShapeData(shapeData, filename){
+    // Importar es abrir un proyecto nuevo con el nombre del diseño: no pisa
+    // el proyecto que ya estaba abierto en otra pestaña.
+    ProjectTabs.prepareForImport(filename);
     const navigationState=Viewport.getNavigationState();
     History.clear();   // carga nueva = historial fresco
     PanelUI.clearAllSelection();
@@ -8703,6 +9800,9 @@ const PanelUI = (() => {
     // Snapshot del estado base DESPUÉS de construir toda la escena
     History.push(State);
     ProjectTabs.syncActiveFromState();
+    // Un diseño importado todavia no existe como proyecto del programa: el
+    // asterisco aparece desde el primer momento, no recien al primer cambio.
+    ProjectTabs.markDirty();
     Utils.toast(`${shapeData.length} contorno(s) cargados. Seleccioná y extruí.`,'ok');
   }
 
@@ -8715,6 +9815,85 @@ const PanelUI = (() => {
       if(!shapeData.length){Utils.toast('No se encontraron contornos cerrados.','err');return;}
       populateShapeData(shapeData, file.name.replace(/\.(dxf|svg)$/i,''));
     } catch(err){Utils.toast('Error: '+err.message,'err');console.error(err);}
+  }
+
+  /* ── Importar un modelo 3D (3MF / OBJ+MTL) ────────────────────────────
+     Preferencia por el proyecto incrustado: si el archivo salio de INKORA,
+     vuelve entero y editable. Si no, se reconstruye desde la malla.
+
+     En los dos casos el resultado entra como proyecto nuevo y sin guardar,
+     igual que un DXF: lo que se abrio es un modelo, no un .inkora3d.
+  ─────────────────────────────────────────────────────────────────────── */
+  function baseModelName(name) {
+    return String(name || 'modelo').replace(/\.(3mf|obj|mtl)$/i, '');
+  }
+
+  async function loadModelFile(file, mtlFile = null) {
+    const is3MF = /\.3mf$/i.test(file.name || '');
+    const label = is3MF ? '3MF' : 'OBJ';
+    const projectName = baseModelName(file.name);
+    Utils.toast(`Leyendo ${label}…`, '', 60000);
+    try {
+      const read = is3MF
+        ? await MeshImport.read3MF(await file.arrayBuffer())
+        : MeshImport.readOBJ(await file.text(), mtlFile ? await mtlFile.text() : null);
+
+      if (read.project) {
+        const snap = hydrateProjectSnapshot(read.project.snapshot);
+        snap.filename = projectTitleFromName(snap.filename || projectName);
+        ProjectTabs.openProjectSnapshot(snap, { name: snap.filename, dirty: true });
+        Utils.toast(
+          `${label} importado como proyecto completo: ${State.pieces.length} pieza(s).`,
+          'ok'
+        );
+        return;
+      }
+
+      const { snapshot, skipped } = MeshImport.meshesToSnapshot(read.meshes, projectName);
+      ProjectTabs.openProjectSnapshot(hydrateProjectSnapshot(snapshot), {
+        name: projectName,
+        dirty: true,
+      });
+      const warnings = [];
+      if (!is3MF && !mtlFile) warnings.push('sin el .mtl no vienen los colores');
+      if (skipped.length) warnings.push(`${skipped.length} pieza(s) sin geometría legible`);
+      Utils.toast(
+        `${label} reconstruido desde la malla: ${State.pieces.length} pieza(s)` +
+        (warnings.length ? ` (${warnings.join('; ')})` : '') + '.',
+        warnings.length ? 'err' : 'ok'
+      );
+    } catch (err) {
+      Utils.toast(`Error al importar el ${label}: ` + err.message, 'err');
+      console.error(err);
+    }
+  }
+
+  /* Un OBJ sin su .mtl entra gris. Se busca el hermano entre los archivos
+     que vinieron en la misma seleccion o en el mismo drop; el nombre
+     preferido es el que declara `mtllib`, y si no aparece, cualquier .mtl
+     del lote. */
+  async function pickMtlSibling(objFile, candidates) {
+    const mtls = candidates.filter(f => f !== objFile && /\.mtl$/i.test(f.name || ''));
+    if (!mtls.length) return null;
+    if (mtls.length === 1) return mtls[0];
+    const declared = (await objFile.text()).match(/^\s*mtllib\s+(.+)$/mi)?.[1]?.trim();
+    return mtls.find(f => f.name === declared) || mtls[0];
+  }
+
+  const IMPORTABLE_RE = /\.(dxf|svg|3mf|obj|inkora3d)$/i;
+
+  async function importAnyFiles(files) {
+    const list = [...files];
+    const primary = list.find(f => IMPORTABLE_RE.test(f.name || ''));
+    if (!primary) {
+      Utils.toast('Formatos aceptados: proyectos .inkora3d y diseños DXF, SVG, 3MF y OBJ (con su MTL).', 'err');
+      return;
+    }
+    // Un .inkora3d no es un diseño a importar: es un proyecto a abrir.
+    if (/\.inkora3d$/i.test(primary.name)) { await loadProjectFile(primary); return; }
+    if (/\.(dxf|svg)$/i.test(primary.name)) { await loadDXF(primary); return; }
+    const mtl = /\.obj$/i.test(primary.name) ? await pickMtlSibling(primary, list) : null;
+    await loadModelFile(primary, mtl);
   }
 
   // ── Pegar desde CorelDRAW (Ctrl+C en Corel → Ctrl+V acá) ─────────────────
@@ -8817,7 +9996,11 @@ const PanelUI = (() => {
     const area  = document.getElementById('svg-paste-area');
     function openModal(){ modal.style.display='flex'; area.value=''; setTimeout(()=>area.focus(),80); }
     function closeModal(){ modal.style.display='none'; area.value=''; }
-    document.getElementById('btn-paste-svg').addEventListener('click', openModal);
+    document.getElementById('btn-paste-svg').addEventListener('click', e => {
+      e.stopPropagation();
+      FileMenu.close();
+      openModal();
+    });
     document.getElementById('svg-paste-close').addEventListener('click', closeModal);
     document.getElementById('svg-paste-cancel').addEventListener('click', closeModal);
     modal.addEventListener('click', e => { if(e.target===modal) closeModal(); });
@@ -9467,8 +10650,15 @@ const PanelUI = (() => {
     }
   }
 
+  /* El proyecto viaja incrustado en TODO 3MF/OBJ que genera el programa,
+     tambien en el que se manda al laminador: asi cualquier archivo que salga
+     de INKORA se puede volver a abrir como proyecto editable, sin que el
+     usuario tenga que acordarse de cual era cual. */
   function currentExportOptions() {
-    if (!exportClearanceEnabled) return { clearanceMm: 0 };
+    const embeddedProject = State.contours.length
+      ? JSON.stringify(buildProjectPayload())
+      : null;
+    if (!exportClearanceEnabled) return { clearanceMm: 0, embeddedProject };
     const clearanceMm = validateExportClearance();
     if (!Number.isFinite(clearanceMm)) {
       exportGapInput?.focus();
@@ -9478,6 +10668,7 @@ const PanelUI = (() => {
     }
     return {
       clearanceMm,
+      embeddedProject,
     };
   }
 
@@ -10161,7 +11352,14 @@ const PanelUI = (() => {
   closeBtn.addEventListener('click', showPill);
   pill.addEventListener('click', showCard);
 
-  actionBtn.addEventListener('click', () => {
+  actionBtn.addEventListener('click', async () => {
+    // Reiniciar para instalar cierra la app: los cambios sin guardar se
+    // preguntan igual que en cualquier otro cierre. El hook lo publica el
+    // controlador principal; si por lo que sea no está, no se bloquea la
+    // actualización.
+    if (phase === 'downloaded' && window.inkoraConfirmSafeToClose) {
+      if (!await window.inkoraConfirmSafeToClose()) return;
+    }
     if (phase === 'available') {
       phase = 'downloading';
       errorEl.style.display = 'none';

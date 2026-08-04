@@ -55,6 +55,10 @@ function resolveAppHtml() {
 const APP_HTML = resolveAppHtml();
 
 let mainWindow = null;
+// El cierre lo decide la pagina: main lo frena, pregunta, y solo cierra
+// cuando el renderer confirma. Sin este flag el usuario perderia el
+// proyecto sin que nadie le pregunte nada.
+let allowClose = false;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -77,6 +81,16 @@ function createWindow() {
   });
 
   Menu.setApplicationMenu(null);
+
+  win.on('close', (event) => {
+    if (allowClose) return;
+    // Si el renderer se cayo no hay quien conteste: cerrar igual, en vez de
+    // dejar una ventana que no se puede cerrar.
+    if (win.webContents.isDestroyed() || win.webContents.isCrashed()) return;
+    event.preventDefault();
+    win.webContents.send('app-close-request');
+  });
+
   win.loadFile(APP_HTML);
   watchForChanges(win);
   mainWindow = win;
@@ -301,7 +315,14 @@ ipcMain.on('updater-download', () => {
   autoUpdater.downloadUpdate().catch((err) => sendStatus('error', { message: err?.message || String(err) }));
 });
 ipcMain.on('updater-install', () => {
+  allowClose = true; // reiniciar para instalar no debe volver a preguntar
   autoUpdater.quitAndInstall();
+});
+
+// La pagina ya resolvio los cambios pendientes (guardo o descarto).
+ipcMain.on('app-close-confirmed', () => {
+  allowClose = true;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
 });
 
 ipcMain.handle('slicer-open-3mf', async (_event, payload) => {
