@@ -178,7 +178,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   margin-top:9px;font-size:8px;letter-spacing:.16em;text-transform:uppercase;
   color:var(--text-faint);
 }
-#color-recents{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:180px}
+#color-recents,#color-presets{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;max-width:180px}
 .cp-recent{
   width:18px;height:18px;border-radius:3px;cursor:pointer;padding:0;
   border:1px solid rgba(255,255,255,.16);transition:transform .1s,box-shadow .1s;
@@ -901,7 +901,10 @@ html.light{
   <div id="panel">
     <!-- ══ EXTRUSIÓN ══ -->
     <div class="section">
-      <div class="section-title">Extrusión <span id="sel-badge" class="section-badge" style="display:none">0 sel.</span></div>
+      <!-- El badge nunca se saca del flujo: con display:none la fila del
+           título encoge y todo el panel de abajo salta al seleccionar. Se
+           oculta con visibility, conservando su alto. -->
+      <div class="section-title">Extrusión <span id="sel-badge" class="section-badge" style="visibility:hidden">0 sel.</span></div>
       <div class="irow"><label>Profundidad (mm)</label><input class="inum" type="text" inputmode="decimal" id="ex-depth" value="3" data-min="-100" data-max="100" data-step="0.5"></div>
       <div class="irow"><label>Bisel (mm)</label><input class="inum" type="text" inputmode="decimal" id="ex-bevel" value="0" data-min="0" data-max="5" data-step="0.1"></div>
       <div class="irow"><label>Segmentos bisel</label><input class="inum" type="number" id="ex-bseg" value="3" min="1" max="8" step="1" disabled></div>
@@ -942,6 +945,12 @@ html.light{
             aria-label="Cuentagotas">
       <svg viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M9.2 2.1a1.7 1.7 0 0 1 2.4 2.4l-1 1 .7.7-1.1 1.1-.7-.7-4.3 4.3-2.4.6.6-2.4 4.3-4.3-.7-.7L8.1 3l.7.7 1-1z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
     </button>
+  </div>
+  <!-- Paleta fija: los mismos colores con nombre en todos los proyectos.
+       Se llena desde ColorPalette al iniciar, no desde la escena. -->
+  <div id="color-presets-wrap">
+    <div class="cp-label">Paleta</div>
+    <div id="color-presets"></div>
   </div>
   <div id="color-recents-wrap" style="display:none">
     <div class="cp-label">Colores del proyecto</div>
@@ -1081,6 +1090,81 @@ const Utils = (() => {
     return inside;
   }
   return { toast, palette, isVisibleContour, isPanelContour, parseDecimal, clamp, pointInPolygon, defaultContourColor, selectedContourColor, resolveLegacyColor, contourDisplayColor, contrastingLineColor, relativeLuminance, accentColor };
+})();
+
+
+/* ══════════════════════════════════════════════════════
+   PALETA FIJA CON NOMBRE
+   Los mismos colores en todos los proyectos: no dependen de
+   lo que ya se haya usado en la escena, no se guardan en el
+   archivo y no cambian entre sesiones. El nombre no es
+   decorativo — es el que hereda una pieza sin nombre propio
+   al pintarse, y el que termina en el 3MF y en el OBJ.
+
+   Los hex se comparan en minúscula: un color escrito a mano
+   o venido de un proyecto viejo tiene que reconocerse igual.
+   ══════════════════════════════════════════════════════ */
+const ColorPalette = (() => {
+  const COLORS = [
+    { name: 'Rojo',       hex: '#e23b3b' },
+    { name: 'Naranja',    hex: '#f07a26' },
+    { name: 'Amarillo',   hex: '#f2c53d' },
+    { name: 'Verde',      hex: '#3fb95a' },
+    { name: 'Verde agua', hex: '#2fbfa0' },
+    { name: 'Celeste',    hex: '#3fa9e0' },
+    { name: 'Azul',       hex: '#2f5fd0' },
+    { name: 'Violeta',    hex: '#7c4fd0' },
+    { name: 'Rosa',       hex: '#e2569b' },
+    { name: 'Marrón',     hex: '#8a5a34' },
+    { name: 'Beige',      hex: '#d8c3a0' },
+    { name: 'Blanco',     hex: '#f2f2f5' },
+    { name: 'Gris',       hex: '#8a8a96' },
+    { name: 'Negro',      hex: '#1c1c22' },
+  ];
+  const byHex = new Map(COLORS.map(c => [c.hex.toLowerCase(), c.name]));
+  function nameFor(hex) {
+    return byHex.get(String(hex || '').toLowerCase()) || null;
+  }
+  return { COLORS, nameFor };
+})();
+
+
+/* ══════════════════════════════════════════════════════
+   NOMBRES DE ELEMENTOS
+   Un elemento de la lista es un contorno 2D o una pieza 3D.
+   El nombre vive en `contour.name` mientras es 2D y pasa a
+   `piece.name` al extruir, así renombrar antes de extruir no
+   se pierde.
+
+   `piece.nameAuto` distingue el nombre puesto por la app
+   (`Pieza 03`, `Rojo 2`) del que escribió el usuario: solo el
+   automático se pisa al pintar con un color de la paleta.
+   ══════════════════════════════════════════════════════ */
+const Naming = (() => {
+  function autoContourName(idx) {
+    return `Contorno ${String(idx + 1).padStart(2, '0')}`;
+  }
+  function rowName(contour, idx) {
+    if (!contour) return '—';
+    if (contour.extruded) return contour.piece?.name ?? '—';
+    return contour.name || autoContourName(idx);
+  }
+  /* Nombres ya ocupados en el proyecto. `skipPieces` deja fuera las
+     piezas que están por renombrarse: si no, una pieza chocaría con su
+     propio nombre anterior y saltaría un número por gusto. */
+  function takenNames(skipPieces = []) {
+    const skip = new Set(skipPieces);
+    const taken = new Set();
+    State.pieces.forEach(p => { if (!skip.has(p)) taken.add(p.name); });
+    State.contours.forEach(c => { if (c && c.name && !c.extruded) taken.add(c.name); });
+    return taken;
+  }
+  function nextNumbered(base, taken) {
+    let n = 1;
+    while (taken.has(`${base} ${n}`)) n++;
+    return `${base} ${n}`;
+  }
+  return { autoContourName, rowName, takenNames, nextNumbered };
 })();
 
 
@@ -4230,9 +4314,10 @@ const GeoModule = (() => {
     baseX, baseY, baseZ,
     tx = 0, ty = 0, tz = 0, rotY = 0, scale = 1,
     holeIdxs = [], solidIslandIdxs = [], mergedSourceIdxs = [], sourceContourIdx = null,
+    nameAuto = true,
   }) {
     return {
-      mesh, name, color, contourIdx,
+      mesh, name, color, contourIdx, nameAuto,
       _depth: depth, _bevel: bevel, _bevelSeg: bevelSeg,
       _holeIdxs: holeIdxs,
       _solidIslandIdxs: solidIslandIdxs,
@@ -4905,11 +4990,25 @@ const Exporter = (() => {
       allGeoms.map(geometry => geometry.nVerts)
     );
 
+    /* El nombre del elemento viaja al archivo: es lo que el laminador
+       muestra por pieza. Dos piezas con el mismo nombre se leen como una
+       sola en el OBJ (los `g` iguales se funden) y confunden en el 3MF, asi
+       que se desambiguan aca, una sola vez, para los dos formatos. */
+    const usedNames = new Set();
+    function uniqueExportName(raw, index) {
+      const base = String(raw ?? '').trim() || `Pieza ${index + 1}`;
+      let name = base;
+      let n = 2;
+      while (usedNames.has(name)) name = `${base} (${n++})`;
+      usedNames.add(name);
+      return name;
+    }
+
     const records = pieces.map((piece, index) => ({
       piece,
       geometry: allGeoms[index],
       objectId: index + 1,
-      name: piece.name || `Pieza ${index + 1}`,
+      name: uniqueExportName(piece.name, index),
       hex: hexFromPiece(piece).toLowerCase(),
     }));
     // El orden de colores unicos define el indice de filamento en los dos
@@ -5067,6 +5166,14 @@ const Exporter = (() => {
     return clean || fallback;
   }
 
+  /* Nombre de grupo OBJ. En `g` el espacio separa nombres: "Tapa frontal"
+     entraria como dos grupos, "Tapa" y "frontal", y el nombre del elemento
+     se perderia. Se colapsa a guion bajo, que es lo que hacen los
+     exportadores del formato. */
+  function objGroupName(value, fallback) {
+    return objName(value, fallback).replace(/\s+/g, '_');
+  }
+
   function materialNameFor(hex, index) {
     return `INKORA_${String(index + 1).padStart(2, '0')}_${hex.toUpperCase()}`;
   }
@@ -5094,7 +5201,7 @@ const Exporter = (() => {
     let vertexOffset = 0;
     records.forEach((record, index) => {
       const { verts, indices, nVerts, nTris } = record.geometry;
-      objLines.push(`g ${objName(record.name, `Pieza ${index + 1}`)}`);
+      objLines.push(`g ${objGroupName(record.name, `Pieza ${index + 1}`)}`);
       for (let i = 0; i < nVerts; i++) {
         objLines.push(
           `v ${fixed(verts[i * 3])} ` +
@@ -5225,6 +5332,8 @@ const History = (() => {
         parentIdx: c.parentIdx,
         layer:   c.layer || '0',
         color:   c.color ?? null, // null se preserva — se resuelve al mostrar, según tema
+        // Nombre propio del elemento. null = todavía se llama por su índice.
+        name:    c.name || null,
         elementId: c.elementId ?? null,
         isVoid: !!c._isVoid,
         voidKind: c._voidKind || null,
@@ -5245,6 +5354,9 @@ const History = (() => {
         // datos de la pieza extruida, si existe
         pieceData: c.piece && c.piece.contourIdx === state.contours.indexOf(c) ? {
           name:     c.piece.name,
+          // Proyectos viejos no traen el flag: se asumen automáticos, que es
+          // como se comportaban hasta ahora.
+          nameAuto: c.piece.nameAuto !== false,
           color:    c.piece.color,
           depth:    c.piece._depth,
           bevel:    c.piece._bevel,
@@ -5835,25 +5947,30 @@ const PanelUI = (() => {
       PanelUI.openColorPopoverFor(i, e.clientX, e.clientY);
     });
 
-    // ── Click: selección unificada (simple / Ctrl / Shift) ──
-    // Usamos un timer para no interferir con el doble click sobre el nombre
-    let _clickTimer = null;
-    item.addEventListener('click', e => {
+    /* ── Click: selección unificada (simple / Ctrl / Shift) ──
+       Va en `pointerdown`, no en `click`: la selección se ve apenas se
+       aprieta el botón, sin esperar a que se suelte.
+
+       Antes había además un timer de 220 ms sobre el nombre para no pisar
+       un posible doble click de renombrado. Ese retardo era todo el lag
+       que se sentía al elegir una fila, y ya no hace falta: seleccionar y
+       renombrar no se estorban — el doble click abre el input sobre la
+       fila que el primer click acaba de seleccionar. */
+    item.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
       if (e.target.tagName === 'INPUT') return;
-      // Si el click fue sobre el nombre, esperar brevemente por un posible dblclick
-      const nameEl = item.querySelector('.p-name');
-      const onName = nameEl && nameEl.contains(e.target);
-      clearTimeout(_clickTimer);
-      _clickTimer = setTimeout(() => {
-        const i = parseInt(item.dataset.idx, 10);
-        const ct = State.contours[i];
-        if (!Utils.isVisibleContour(ct)) return;
-        _selectOne(i, e.ctrlKey || e.metaKey, e.shiftKey ? _lastTouchedIdx : undefined);
-        refreshContourVisuals();
-        renderList();
-        updateModeBadge();
-        updateColorPanel();
-      }, onName ? 220 : 0);
+      if (swatchWrap.contains(e.target)) return; // abre el color, no selecciona
+      const i = parseInt(item.dataset.idx, 10);
+      const ct = State.contours[i];
+      if (!Utils.isVisibleContour(ct)) return;
+      _selectOne(i, e.ctrlKey || e.metaKey, e.shiftKey ? _lastTouchedIdx : undefined);
+      refreshContourVisuals();
+      // Cambió la selección, no la lista: alcanza con repintar las filas
+      // existentes. Reconstruir el árbol entero en cada click cuesta caro
+      // con muchos contornos y es la otra mitad de la demora.
+      refreshListSelection();
+      updateModeBadge();
+      updateColorPanel();
     });
 
     // ── Doble click en el nombre: renombrar ──
@@ -5861,55 +5978,140 @@ const PanelUI = (() => {
       // Solo activar si el doble click fue sobre el texto del nombre
       const nameEl = item.querySelector('.p-name');
       if (!nameEl || !nameEl.contains(e.target)) return;
-      clearTimeout(_clickTimer); // cancelar el click simple pendiente
       e.stopPropagation();
-      const i  = parseInt(item.dataset.idx, 10);
-      const ct = State.contours[i];
-      if (!ct || nameEl.tagName === 'INPUT') return;
-      const is3D = ct.extruded && ct.piece;
-      const prev = is3D ? ct.piece.name : nameEl.textContent;
-      const inp  = document.createElement('input');
-      inp.className = 'p-name-input';
-      inp.value = prev; inp.maxLength = 40;
-      nameEl.replaceWith(inp);
-      inp.focus(); inp.select();
-      function commit() {
-        const next = inp.value.trim() || prev;
-        const span = document.createElement('div');
-        span.className = 'p-name'; span.textContent = next;
-        inp.replaceWith(span);
-        if (next === prev) return;
-        // Aplicar nombre a TODOS los seleccionados del mismo tipo
-        if (is3D) {
-          // Renombrar todas las piezas 3D seleccionadas con nombre secuencial
-          const sel3D = [...State.selectedIdxs].filter(si => {
-            const sc = State.contours[si]; return sc && sc.extruded && sc.piece;
-          });
-          if (sel3D.length === 1) {
-            ct.piece.name = next;
-          } else {
-            sel3D.forEach((si, n) => {
-              State.contours[si].piece.name = sel3D.length > 1 ? `${next} ${n + 1}` : next;
-            });
-          }
-          const pIdx = State.pieces.indexOf(ct.piece);
-          if (pIdx !== -1 && State.selectedPieceIdx === pIdx) {
-            const tpn = document.getElementById('transform-piece-name');
-            if (tpn) tpn.textContent = ct.piece.name;
-          }
-        }
-        renderList();
-        History.push(State);
-      }
-      inp.addEventListener('keydown', ev => {
-        if (ev.key === 'Enter')  { ev.preventDefault(); inp.blur(); }
-        if (ev.key === 'Escape') { inp.value = prev; inp.blur(); }
-      });
-      inp.addEventListener('blur', commit);
+      _startRename(item);
     });
 
     _patchItem(item, c, idx);
     return item;
+  }
+
+  /* ── Renombrado ───────────────────────────────────────────────────────
+     Un solo camino para el doble click y para la tecla de renombrar.
+
+     Con varios elementos seleccionados el nombre se aplica a todos, no
+     solo a la fila donde se escribe, y se ve mientras se tipea: cada fila
+     hermana muestra ya su número final. Enter confirma, Escape cancela y
+     deja todo como estaba.
+  ────────────────────────────────────────────────────────────────────── */
+
+  /* Filas que recibirán el nombre: las seleccionadas (en orden de lista,
+     no en orden de click, para que la numeración siga lo que se ve) más la
+     fila donde se escribe si no estaba seleccionada. */
+  function _renameTargets(anchorIdx) {
+    const idxs = State.contours
+      .map((c, i) => (Utils.isPanelContour(c, i) && State.selectedIdxs.has(i)) ? i : -1)
+      .filter(i => i !== -1);
+    if (!idxs.includes(anchorIdx)) idxs.unshift(anchorIdx);
+    return idxs;
+  }
+
+  function _previewName(base, position, total) {
+    return total > 1 ? `${base} ${position + 1}` : base;
+  }
+
+  function _applyRename(idxs, base) {
+    let changed = false;
+    idxs.forEach((i, position) => {
+      const c = State.contours[i];
+      if (!c) return;
+      const next = _previewName(base, position, idxs.length);
+      if (c.extruded && c.piece) {
+        if (c.piece.name === next) return;
+        c.piece.name = next;
+        // Nombre puesto a mano: pintar la pieza con un color de la paleta
+        // ya no lo pisa.
+        c.piece.nameAuto = false;
+        // El contorno guarda el mismo nombre: si después se borra la pieza y
+        // vuelve a ser 2D, sigue llamándose igual.
+        c.name = next;
+      } else {
+        if (c.name === next) return;
+        c.name = next;
+      }
+      changed = true;
+    });
+    return changed;
+  }
+
+  function _startRename(item) {
+    const nameEl = item.querySelector('.p-name');
+    if (!nameEl) return; // ya hay un input abierto en esta fila
+    const anchorIdx = parseInt(item.dataset.idx, 10);
+    const ct = State.contours[anchorIdx];
+    if (!ct) return;
+
+    const idxs = _renameTargets(anchorIdx);
+    const prevNames = idxs.map(i => Naming.rowName(State.contours[i], i));
+    const prev = Naming.rowName(ct, anchorIdx);
+
+    const inp = document.createElement('input');
+    inp.className = 'p-name-input';
+    inp.value = prev; inp.maxLength = 40;
+    nameEl.replaceWith(inp);
+    inp.focus(); inp.select();
+
+    // Repinta el nombre visible de las demás filas seleccionadas mientras
+    // se escribe. Solo toca el DOM: el estado se escribe recién al confirmar.
+    function paintPreview(raw) {
+      const base = raw.trim();
+      idxs.forEach((i, position) => {
+        if (i === anchorIdx) return;
+        const row = document.querySelector(`.piece-item[data-idx="${i}"] .p-name`);
+        if (!row) return;
+        row.textContent = base ? _previewName(base, position, idxs.length) : prevNames[position];
+      });
+    }
+
+    let done = false;
+    function finish(commit) {
+      if (done) return;
+      done = true;
+      const base = inp.value.trim();
+      const span = document.createElement('div');
+      span.className = 'p-name';
+      span.textContent = (commit && base)
+        ? _previewName(base, idxs.indexOf(anchorIdx), idxs.length)
+        : prev;
+      if (inp.parentNode) inp.replaceWith(span);
+
+      if (!commit || !base) { renderList(); return; }
+      const changed = _applyRename(idxs, base);
+      renderList();
+      if (changed) History.push(State);
+    }
+
+    inp.addEventListener('input', () => paintPreview(inp.value));
+    inp.addEventListener('keydown', ev => {
+      ev.stopPropagation(); // el keymap global no debe ver lo que se escribe
+      if (ev.key === 'Enter')  { ev.preventDefault(); finish(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    });
+    inp.addEventListener('blur', () => finish(true));
+  }
+
+  /* Abre el renombrado desde el teclado, sobre la fila de referencia de la
+     selección actual. Si la fila está dentro de un grupo colapsado,
+     scrollToItem lo abre antes. */
+  function beginRenameSelection() {
+    if (!State.selectedIdxs.size) {
+      Utils.toast('Seleccioná un elemento para renombrarlo.');
+      return;
+    }
+    const candidates = State.contours
+      .map((c, i) => (Utils.isPanelContour(c, i) && State.selectedIdxs.has(i)) ? i : -1)
+      .filter(i => i !== -1);
+    if (!candidates.length) {
+      // La selección puede ser toda de sub-caras de una pieza unida: su fila
+      // de panel es la representativa de la pieza.
+      const rep = _panelRepresentativeIdx([...State.selectedIdxs][0]);
+      if (rep < 0) { Utils.toast('Esa selección no tiene una fila para renombrar.'); return; }
+      candidates.push(rep);
+    }
+    const anchor = candidates.includes(_lastTouchedIdx) ? _lastTouchedIdx : candidates[0];
+    scrollToItem(anchor);
+    const row = document.querySelector(`.piece-item[data-idx="${anchor}"]`);
+    if (row) _startRename(row);
   }
 
   /* ── _patchItem ───────────────────────────────────────────────────────
@@ -5951,7 +6153,7 @@ const PanelUI = (() => {
     const nameEl    = item.querySelector('.p-name, .p-name-input');
     const isEditing = nameEl && nameEl.tagName === 'INPUT';
     if (!isEditing) {
-      const wantName = c.extruded ? (c.piece?.name ?? '—') : `Contorno ${String(idx + 1).padStart(2, '0')}`;
+      const wantName = Naming.rowName(c, idx);
       if (nameEl && nameEl.textContent !== wantName) nameEl.textContent = wantName;
     }
 
@@ -5985,6 +6187,33 @@ const PanelUI = (() => {
     item.dataset.idx = idx;
   }
 
+  /* ── refreshListSelection ─────────────────────────────────────────────
+     Camino liviano para cuando cambió QUÉ está seleccionado pero no qué
+     filas existen: repinta el estado de las filas ya montadas en vez de
+     reconstruir el árbol.
+
+     No recalcula dimensiones (un Box3 por pieza) ni vuelve a crear nodos,
+     así que un click en la lista se ve en el mismo frame por más contornos
+     que haya. Tampoco pisa un input de renombrado abierto.
+  ────────────────────────────────────────────────────────────────────── */
+  function refreshListSelection() {
+    const wrap = document.getElementById('pieces-wrap');
+    if (!wrap) return;
+    wrap.querySelectorAll('.piece-item').forEach(item => {
+      const idx = parseInt(item.dataset.idx, 10);
+      const c = State.contours[idx];
+      if (!c) return;
+      item.classList.toggle('sel-2d', !c.extruded && !!c.sel2D);
+      item.classList.toggle('sel-3d', !!c.extruded && _isPanelRowSelected(c, idx));
+      const swatch = item.querySelector('.p-swatch');
+      const wantBg = c.extruded
+        ? (c.piece?.color || '#c8c8d0')
+        : (c.sel2D ? SEL : (c.color || NEUTRAL));
+      if (swatch && swatch.style.background !== wantBg) swatch.style.background = wantBg;
+    });
+    updateSelCount(); updateHUD(); updateButtons();
+  }
+
   function toggleSel(idx){
     // Legacy: usado por la tecla 'E' de extrude; funciona igual que antes
     const c=State.contours[idx];
@@ -6015,8 +6244,10 @@ const PanelUI = (() => {
     const n   = State.selectedIdxs.size;
     document.getElementById('sel-count-label').textContent=`${n} seleccionado${n!==1?'s':''}`;
     const badge=document.getElementById('sel-badge');
-    if(n>0){badge.style.display='inline';badge.textContent=`${n} sel.`;}
-    else badge.style.display='none';
+    // Solo cambia la visibilidad: el alto del badge queda reservado siempre
+    // para que la lista no se corra unos pixeles al seleccionar.
+    badge.textContent=`${n} sel.`;
+    badge.style.visibility=n>0?'visible':'hidden';
   }
   function updateHUD(){
     document.getElementById('h-pieces').textContent=State.contours.filter((c, i) => Utils.isPanelContour(c, i)).length;
@@ -6126,12 +6357,48 @@ const PanelUI = (() => {
       c.piece.mesh.material.emissiveIntensity = 0;
       if (pushHistory && c.piece.mesh.userData._selected) Viewport.applyHighlight(c.piece.mesh, 'select');
     });
+    // El nombre se toca recién al confirmar, no en la vista previa en vivo:
+    // arrastrando por el cuadrado de color se pasa por cientos de valores y
+    // las piezas quedarían renombrándose sin parar.
+    if (pushHistory) applyPaletteName(hex, targets);
     renderList();
     if (pushHistory) {
       State.colorTargetIdxs = null;
       History.push(State);
     }
     return true;
+  }
+
+  /* ── applyPaletteName ─────────────────────────────────────────────────
+     Una pieza sin nombre propio toma el del color de la paleta con que se
+     pinta, numerado para que no haya dos iguales en el proyecto: Rojo 1,
+     Rojo 2… Pintar varias a la vez las numera en orden de lista.
+
+     Solo se aplica a nombres automáticos: si alguien escribió "Tapa
+     frontal", pintarla de rojo no se lo borra. Y solo con un color exacto
+     de la paleta — un color elegido a mano no tiene nombre que heredar.
+  ────────────────────────────────────────────────────────────────────── */
+  function applyPaletteName(hex, targets) {
+    const colorName = ColorPalette.nameFor(hex);
+    if (!colorName) return;
+
+    // Orden de lista, sin repetir piezas (una pieza unida aporta varias filas)
+    const pieces = [];
+    targets
+      .slice()
+      .sort((a, b) => a.idx - b.idx)
+      .forEach(({ c }) => {
+        if (c.piece.nameAuto === false) return;
+        if (!pieces.includes(c.piece)) pieces.push(c.piece);
+      });
+    if (!pieces.length) return;
+
+    const taken = Naming.takenNames(pieces);
+    pieces.forEach(piece => {
+      piece.name = Naming.nextNumbered(colorName, taken);
+      piece.nameAuto = true;
+      taken.add(piece.name);
+    });
   }
 
   function openColorPopoverAt(x, y) {
@@ -6206,8 +6473,9 @@ const PanelUI = (() => {
   }
 
   return {
-    renderList, refreshContourVisuals, toggleSel, selectAll, selectNone,
+    renderList, refreshListSelection, refreshContourVisuals, toggleSel, selectAll, selectNone,
     updateButtons, updateModeBadge, updateColorPanel, updateHUD, highlightRow,
+    beginRenameSelection,
     selectOne: _selectOne,
     clearAllSelection: _clearAllSelection,
     _syncPieceSelection,
@@ -6539,6 +6807,7 @@ const PanelUI = (() => {
           shape: sc.shape, offX: sc.offX, offY: sc.offY,
           depth: sc.depth, parentIdx: sc.parentIdx,
           layer: sc.layer || '0', color: Utils.resolveLegacyColor(sc.color),
+          name: sc.name || null,
           elementId: sc.elementId ?? null,
           flatMesh: null, outlineMesh: null,
           sel2D: false, extruded: true, piece: null,
@@ -6583,6 +6852,7 @@ const PanelUI = (() => {
           Viewport.add3D(mesh);
           const piece = GeoModule.makePiece({
             mesh, name: pd.name, color: pd.color,
+            nameAuto: pd.nameAuto !== false,
             contourIdx: i,
             depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg,
             holeIdxs: pd.holeIdxs || [],
@@ -6625,6 +6895,7 @@ const PanelUI = (() => {
         shape: sc.shape, offX: sc.offX, offY: sc.offY,
         depth: sc.depth, parentIdx: sc.parentIdx,
         layer: sc.layer || '0', color: legacyColor,
+        name: sc.name || null,
         elementId: sc.elementId ?? null,
         flatMesh, outlineMesh,
         sel2D: sc.sel2D, extruded: sc.extruded, piece: null,
@@ -6665,6 +6936,7 @@ const PanelUI = (() => {
         Viewport.add3D(mesh);
         const piece = GeoModule.makePiece({
           mesh, name: pd.name, color: pd.color,
+          nameAuto: pd.nameAuto !== false,
           contourIdx: i,
           depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg,
           holeIdxs: pd.holeIdxs || [],
@@ -7363,6 +7635,7 @@ const PanelUI = (() => {
       { id:'selAll',      group:'Selección',  desc:'Seleccionar todo',           key:'a',         ctrl:false, shift:false, alt:false },
       { id:'selNone',     group:'Selección',  desc:'Deseleccionar todo',         key:'Escape',    ctrl:false, shift:false, alt:false },
       { id:'selInvert',   group:'Selección',  desc:'Invertir selección',         key:'i',         ctrl:false, shift:false, alt:false },
+      { id:'renameSel',   group:'Selección',  desc:'Renombrar selección',        key:'n',         ctrl:false, shift:false, alt:false },
       { id:'selTopFace',    group:'Selección',desc:'Seleccionar caras superiores',key:'1',        ctrl:true,  shift:false, alt:false },
       { id:'selBottomFace', group:'Selección',desc:'Seleccionar caras inferiores',key:'2',        ctrl:true,  shift:false, alt:false },
       // Operaciones
@@ -7585,6 +7858,10 @@ const PanelUI = (() => {
           PanelUI.refreshContourVisuals(); PanelUI.renderList(); PanelUI.updateModeBadge();
           break;
 
+        case 'renameSel':
+          PanelUI.beginRenameSelection();
+          break;
+
         case 'selTopFace':
           selectModelExtremeFace('top');
           break;
@@ -7643,6 +7920,7 @@ const PanelUI = (() => {
           const newPiece = GeoModule.makePiece({
             mesh: newMesh,
             name: src.name + ' (copia)',
+            nameAuto: src.nameAuto !== false,
             color: src.color,
             contourIdx: firstNewIdx,
             sourceContourIdx: src._sourceContourIdx ?? sourceIdxs[0],
@@ -7908,7 +8186,7 @@ const PanelUI = (() => {
       // Cualquier combinación con Ctrl/Cmd también se previene: si llegamos
       // hasta acá es porque `sc` matcheó un atajo real de la app, así que
       // el navegador no debe interceptarlo (ej. Ctrl+1/2 → cambio de pestaña).
-      const preventKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab','Escape','f','a','e','d','c','o','h','i','g','r','s','1','2'];
+      const preventKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab','Escape','f','a','e','d','c','o','h','i','g','n','r','s','1','2'];
       if (preventKeys.includes(e.key) || e.ctrlKey || e.metaKey) e.preventDefault();
       execAction(sc.id);
     }
@@ -8656,7 +8934,9 @@ const PanelUI = (() => {
 
       const mesh = GeoModule.extrude(compositeShape, c.offX, c.offY, {depth: (c.depthOverride ?? extDepth), bevel, bevelSeg:bseg, color, extraShapes});
       Viewport.add3D(mesh);
-      const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
+      // Un contorno renombrado antes de extruir conserva su nombre: la
+      // pieza es el mismo elemento de la lista, no uno nuevo.
+      const name = c.name || `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
       // Guardar qué contornos fueron agregados como holes de esta pieza
       State.contours.forEach((candidate, cidx) => {
         if (candidate === c) return;
@@ -8667,6 +8947,7 @@ const PanelUI = (() => {
       });
       const piece = GeoModule.makePiece({
         mesh, name, color, contourIdx: cIdx,
+        nameAuto: !c.name,
         sourceContourIdx: cIdx,
         depth: (c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
@@ -8695,9 +8976,10 @@ const PanelUI = (() => {
       });
       addMergedContourPickAreas(mesh, mergedItems, (primary.c.depthOverride ?? extDepth));
       Viewport.add3D(mesh);
-      const name = `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
+      const name = primary.c.name || `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
       const piece = GeoModule.makePiece({
         mesh, name, color: primary.color, contourIdx: primary.cIdx,
+        nameAuto: !primary.c.name,
         sourceContourIdx: primary.cIdx,
         depth: (primary.c.depthOverride ?? extDepth), bevel, bevelSeg:bseg,
         baseX: mesh.position.x, baseY: mesh.position.y, baseZ: mesh.position.z,
@@ -9371,12 +9653,19 @@ const PanelUI = (() => {
     const eyedropper = document.getElementById('color-eyedropper');
     const recents = document.getElementById('color-recents');
     const recentsWrap = document.getElementById('color-recents-wrap');
+    const presets = document.getElementById('color-presets');
     const sctx = square.getContext('2d');
     const hctx = hue.getContext('2d');
     let h = 0, s = 0, v = 0.78;
     let active = null;
     let suppressOutsideCloseUntil = 0;
     let originalColors = null;
+    /* Hex elegido de una muestra, tal cual está escrito. El estado interno
+       del picker es HSV: pasar por ahí y volver puede correr un dígito, y
+       entonces el color deja de ser exactamente el de la paleta y la pieza
+       ya no hereda su nombre. Cuando se clickea una muestra, se confirma
+       este valor y no el reconstruido. */
+    let exactHex = null;
 
     function hsvToHex(hh, ss, vv) {
       const c = vv * ss;
@@ -9459,6 +9748,7 @@ const PanelUI = (() => {
       drawHue();
       paintPreview(currentHex());
       renderRecents();
+      markCurrentPreset();
     }
 
     /* Paleta del proyecto: los colores que ya se usaron en alguna pieza.
@@ -9501,9 +9791,48 @@ const PanelUI = (() => {
         swatch.addEventListener('click', event => {
           event.stopPropagation();
           setColor(hex);
+          exactHex = hex;
           closePicker(true);
         });
         recents.append(swatch);
+      });
+    }
+
+    /* Muestras de la paleta fija. Se arman una sola vez: no dependen del
+       proyecto abierto. El nombre va en el tooltip — es el que va a tomar
+       una pieza sin nombre propio. */
+    function buildPresets() {
+      ColorPalette.COLORS.forEach(({ name, hex }) => {
+        const swatch = document.createElement('button');
+        swatch.type = 'button';
+        swatch.className = 'cp-recent';
+        swatch.style.background = hex;
+        swatch.title = `${name} · ${hex.toUpperCase()}`;
+        swatch.dataset.color = hex;
+        swatch.addEventListener('mouseenter', () => {
+          hexLabel.textContent = name.toUpperCase();
+          hexLabel.style.color = Utils.contrastingLineColor(hex);
+        });
+        swatch.addEventListener('mouseleave', () => {
+          hexLabel.textContent = currentHex().toUpperCase();
+          hexLabel.style.color = Utils.contrastingLineColor(currentHex());
+        });
+        swatch.addEventListener('click', event => {
+          event.stopPropagation();
+          setColor(hex);
+          exactHex = hex;
+          closePicker(true);
+        });
+        presets.append(swatch);
+      });
+    }
+    buildPresets();
+
+    function markCurrentPreset() {
+      const current = currentHex().toLowerCase();
+      presets.querySelectorAll('.cp-recent').forEach(swatch => {
+        if (swatch.dataset.color === current) swatch.dataset.current = 'true';
+        else delete swatch.dataset.current;
       });
     }
 
@@ -9531,14 +9860,16 @@ const PanelUI = (() => {
         });
         PanelUI.refreshContourVisuals();
         PanelUI.renderList();
-      } else if (commit && PanelUI.applyColorToSelection(currentHex(), true)) {
+      } else if (commit && PanelUI.applyColorToSelection(exactHex || currentHex(), true)) {
         PanelUI.refreshContourVisuals();
       }
       originalColors = null;
       active = null;
+      exactHex = null;
       pop.style.display = 'none';
     }
     function pickFromSquare(e) {
+      exactHex = null; // a partir de acá el color es el del cuadrado
       const r = square.getBoundingClientRect();
       s = Utils.clamp((e.clientX - r.left) / r.width, 0, 1);
       v = 1 - Utils.clamp((e.clientY - r.top) / r.height, 0, 1);
@@ -9547,6 +9878,7 @@ const PanelUI = (() => {
     }
 
     function pickFromHue(e) {
+      exactHex = null;
       const r = hue.getBoundingClientRect();
       h = Utils.clamp((e.clientX - r.left) / r.width, 0, 1) * 360;
       /* Sobre un gris el tono no existe: con saturacion 0, hsvToHex()
@@ -9591,6 +9923,7 @@ const PanelUI = (() => {
           const hex = String(result?.sRGBHex || '').toLowerCase();
           if (!/^#[0-9a-f]{6}$/.test(hex)) return;
           setColor(hex);
+          exactHex = hex;
           hexLabel.textContent = hex.toUpperCase();
         } catch (_) {
           // Cancelar con Escape es normal, no es un error que reportar.
@@ -9637,6 +9970,7 @@ const PanelUI = (() => {
       const hsv = hexToHsv(pop.dataset.color || '#c8c8d0');
       h = hsv.h; s = hsv.s; v = hsv.v;
       active = null;
+      exactHex = null;
       redraw();
     });
     document.addEventListener('keydown', e => {

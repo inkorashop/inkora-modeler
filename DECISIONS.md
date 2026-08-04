@@ -3,6 +3,76 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-04 - Nombres de elemento, paleta con nombre y seleccion instantanea
+
+### El panel ya no salta al seleccionar
+
+`#sel-badge` se mostraba con `display:none` / `display:inline`. El badge es
+mas alto que el texto del titulo de seccion, asi que aparecer lo estiraba y
+empujaba unos pixeles todo lo que hay debajo, incluida la lista. Ahora el
+badge esta siempre en el flujo y solo cambia `visibility`: el alto de la fila
+queda reservado y la lista no se mueve. Medido en regresion: 0 px de
+desplazamiento entre antes y despues de seleccionar.
+
+### Seleccionar una fila es instantaneo
+
+Habia dos demoras sumadas:
+
+1. un `setTimeout` de 220 ms sobre `click` cuando el click caia en el nombre,
+   para no pisar un posible doble click de renombrado;
+2. un `renderList()` completo — se destruia y reconstruia el arbol entero,
+   con un `Box3.setFromObject` por pieza para recalcular dimensiones.
+
+La seleccion pasa a `pointerdown` (se ve al apretar, no al soltar) y usa
+`refreshListSelection()`, que solo repinta clases y muestras de las filas ya
+montadas. `renderList()` se sigue usando cuando cambia *que* filas existen.
+El timer no hacia falta: seleccionar y renombrar no compiten, el doble click
+abre el input sobre la fila que el primer click acaba de seleccionar.
+
+### Un solo camino de renombrado
+
+Doble click y la tecla `N` entran los dos a `_startRename()`. Con varias
+filas seleccionadas el nombre se aplica a todas y se ve mientras se tipea:
+cada fila hermana muestra ya su numero final (`Ala 1`, `Ala 2`, `Ala 3`).
+Enter confirma, Escape cancela sin tocar el estado. El input frena la
+propagacion del teclado para que el keymap global no lea lo que se escribe.
+
+### El nombre vive en el elemento, no en la pieza
+
+`contour.name` existe tambien para contornos 2D y viaja a `piece.name` al
+extruir: renombrar antes de extruir ya no se pierde. Al renombrar una pieza
+se escribe en los dos lados, asi que borrar la pieza y volver a 2D conserva
+el nombre. Ambos se serializan en `History.snapshot()`, que es la misma
+serializacion que usa el `.inkora3d`, de modo que persisten en undo/redo y en
+el archivo con un solo cambio.
+
+### Paleta fija con nombre
+
+`ColorPalette` define 14 colores con nombre en castellano. Son constantes del
+programa, no estado del proyecto: aparecen iguales en cualquier archivo y no
+se guardan. Conviven con "Colores del proyecto", que sigue mostrando lo que
+ya se uso en la escena.
+
+Una pieza cuyo nombre es automatico (`piece.nameAuto`) toma el nombre del
+color al pintarse, numerado para no repetir: `Rojo 1`, `Rojo 2`. Un nombre
+escrito a mano pone `nameAuto = false` y no se pisa nunca mas.
+
+El renombrado ocurre solo al confirmar el color, no en la vista previa en
+vivo: arrastrando por el cuadrado se pasa por cientos de valores y las piezas
+quedarian renombrandose sin parar. Y el commit usa el hex textual de la
+muestra (`exactHex`), no el reconstruido desde el estado HSV interno del
+picker — ese ida y vuelta puede correr un digito y entonces el color deja de
+coincidir con la paleta y no hay nombre que heredar.
+
+### Nombres en la exportacion
+
+Ya viajaban al 3MF (`<object name>` y `metadata key="name"`) y al OBJ (`g`).
+Se agregan dos garantias en `buildExportRecords()`, comunes a los dos
+formatos: los nombres repetidos se desambiguan (`Igual`, `Igual (2)`) porque
+en OBJ dos `g` iguales se funden en un solo grupo, y en OBJ los espacios se
+colapsan a `_` porque el espacio separa nombres de grupo — `Tapa frontal`
+entraba como dos grupos y el nombre del elemento se perdia.
+
 ## 2026-08-03 (seguimiento 7) - Fuente canonica, librerias locales y distribucion obligatoria
 
 ### `index.html`
