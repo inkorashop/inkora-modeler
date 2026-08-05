@@ -3,6 +3,120 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-05 (seguimiento 2) — DXF: CorelDRAW duplica relleno+contorno como dos entidades, rompía la "D" de Cataratas
+
+### Síntoma
+
+En `Cataratas.dxf`, el hueco de la letra "D" detectaba mal — la selección
+era inconsistente, similar en superficie al bug de la "A" pero de causa
+distinta.
+
+### Causa raíz
+
+El hueco de la "D" (contorno 40 en ese momento) tenía **dos hijos con
+geometría idéntica** (distancia 0.00000mm entre ellos): mismo color, mismo
+padre, mismo nivel, pero **dos entidades DXF distintas**. Revisando el DXF
+crudo se encontraron **10 pares así** en todo el documento, todos con la
+misma firma: una entidad con color ACI 134, otra con ACI 7, mismo layer,
+mismo owner, geometría idéntica.
+
+No es un error aislado del archivo — es un comportamiento conocido del
+exportador DXF de CorelDRAW: un objeto con **relleno y contorno/trazo** a la
+vez (que en Corel es un solo objeto) se exporta como **dos entidades DXF
+separadas** que trazan el mismo borde, porque DXF no tiene forma de
+representar esa combinación en una sola entidad. `dedupeShapes()` (dedup de
+entrada, sobre curvas crudas antes de Clipper) no los agarra: las dos
+entidades no son necesariamente bit-idénticas en su representación cruda,
+y recién convergen a la misma geometría después de pasar por la grilla de
+Clipper.
+
+Importante: esto es DISTINTO del patrón de "frontera coincidente" de
+GEOMETRY_PIPELINE §13 (fondo + relleno superpuesto con roles de diseño
+distintos, ej. la "A"). Ese patrón siempre aparece entre **padre e hijo**,
+con colores de capas diferentes. El duplicado de relleno/contorno siempre
+aparece entre **hermanos** — mismo padre, mismo nivel — así que son
+distinguibles y no hace falta (ni conviene) resolverlos con la misma regla.
+
+### Solución
+
+`dedupeSiblingShapes()`, nueva, corre en `DXFParser.loadText()` después de
+un primer `computeHierarchy()` (necesita padre/nivel para saber quién es
+hermano de quién) y, si sacó algo, recalcula la jerarquía sobre el set ya
+filtrado — los índices de padre cambian. Compara sólo dentro de cada grupo
+(mismo padre, mismo nivel), primero por área (barato, descarta la mayoría)
+y recién después por distancia geométrica real entre los puntos ya
+muestreados por `computeHierarchy`. Se queda el que aparece después en el
+archivo — mismo criterio que ya usa `dedupeShapes()`.
+
+**Guarda explícita:** nunca compara ni descarta un ítem marcado
+`isVoid`/`syntheticVoid`. `applyMaterialVoids()` ya deja a propósito un
+marcador de vacío geométricamente idéntico a un hermano visible (ej. un
+compuesto DXF cuyos dos anillos comparten especificación de color: el
+anillo interior sobrevive como entidad visible Y como marcador de vacío,
+mismo lugar, roles opuestos). La primera versión de este fix no tenía esta
+guarda y rompía exactamente ese test (`dxfSameSpecDonut`) — se detectó
+porque `npm run test:geometry` lo agarró antes de commitear, no en uso real.
+
+Alcance: sólo DXF. SVG no tiene este problema por construcción — Corel
+exporta SVG como paths compuestos (un `<path>` por color, con sub-trazados),
+donde relleno y trazo son atributos del mismo elemento, no dos entidades
+separadas (confirmado: `Cataratas.svg` tiene 5 `<path>` en total contra 81
+`LWPOLYLINE` en el DXF equivalente).
+
+### Verificación
+
+`npm run test:geometry` completo en verde. `Cataratas.dxf` pasa de 119 a
+115 contornos (4 pares deduplicados en este archivo puntual — los otros 6
+pares del DXF crudo no llegaban a sobrevivir como hermanos separados en la
+jerarquía final), 1 vacío real, 4 colores, 0 mallas inválidas en los dos
+modos de extrusión. El test sintético del compuesto DXF con especificación
+de color compartida sigue en verde después de la guarda.
+
+## 2026-08-05 (seguimiento) — Descartado: offset cero en contorno/área + polygonOffset en la cara
+
+### Qué se probó
+
+A pedido del usuario, reemplazar el offset geométrico real de la línea de
+contorno 3D (`capZs` en `addShapeOutline`, 0.005mm) y del área de picking/
+resaltado (`addMergedContourPickAreas`, 0.16mm) por offset **cero** —
+dibujarlas exactamente sobre la posición real de la cara — compensando el
+z-fighting con `polygonOffset` positivo en el material de la cara sólida
+(`mat` en `GeoModule.extrude()`), en vez del offset geométrico.
+
+Es la técnica estándar para overlays coplanares (decals/wireframes) y en
+teoría es correcta: `POLYGON_OFFSET_FILL` sí afecta triángulos (la cara),
+así que empujar la cara hacia atrás en el z-buffer debería alcanzar para que
+la línea/área, en su Z real y sin ningún offset, gane el z-test siempre.
+
+### Por qué no sirvió
+
+Probado sobre `Cataratas.dxf` en modo unido: con offset cero aparece
+z-fighting mucho **peor** que el escalón original, en forma de parches
+irregulares en toda la pieza — no solo en el contorno, sino también en las
+áreas internas (hojas, ondas del agua). Aislado con una prueba (offset cero
++ `polygonOffset` positivo en la cara vs. offset original + el mismo
+`polygonOffset`): el problema no es el signo del offset — con el offset
+geométrico original restaurado y `polygonOffset` positivo en la cara, el
+render vuelve a ser limpio. Es específicamente la coincidencia geométrica
+exacta (offset cero) la que rompe: la línea/área y la cara sólida son
+mallas trianguladas de forma **independiente** (`THREE.Line`/`ShapeGeometry`
+propios vs. `ExtrudeGeometry` de la pieza), así que en el mismo punto (x,y)
+sus vértices no caen en exactamente los mismos triángulos ni la misma
+interpolación de profundidad. La magnitud de `polygonOffset` que tolera esta
+GPU/config no alcanza a cubrir ese ruido de precisión cuando la separación
+real es cero.
+
+### Conclusión
+
+El offset geométrico real (0.005mm en la línea, 0.16mm en el área) sigue
+siendo necesario — no fue una elección arbitraria, es el punto que ya
+funciona de forma robusta. `polygonOffset` en la cara no es un sustituto
+válido de eso en este proyecto: ayuda como mitigación adicional, pero no
+reemplaza tener alguna separación geométrica real. Revertido por completo
+(`git diff` en cero contra el commit anterior). No reintentar sin nueva
+evidencia — ver GEOMETRY_PIPELINE.md si se agrega este tipo de hipótesis
+descartada ahí también.
+
 ## 2026-08-05 — Hueco real invisible detrás de una frontera coincidente + Ctrl+Z reseteaba el modo de extrusión
 
 ### Síntoma

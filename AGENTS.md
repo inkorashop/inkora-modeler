@@ -32,7 +32,14 @@ Reglas especificas:
 - Cuidar precision geometrica, exportaciones y comportamiento visual.
 - No tocar otros proyectos de INKORA desde este repo.
 - No subir configuraciones locales ni secretos.
-- Despues de terminar y validar un cambio, hacer commit + push a `main`.
+- Despues de terminar y validar un cambio (`npm run test:geometry` en
+  verde), el cierre estandar de la tanda es: commit + push a `main` +
+  `npm run distribute:local`. Es la autorizacion estandar para este repo:
+  no hace falta preguntar cada vez ni esperar confirmacion para el push o
+  para regenerar la distribucion -- son parte del mismo flujo de cerrar una
+  tanda validada, no un paso aparte. Preguntar solo si el cambio no paso la
+  regresion, si toca algo fuera de este repo, o si el usuario pidio
+  explicitamente no commitear/pushear en esa tanda.
   El proyecto de Vercel (`inkora-modeler`) esta conectado por Git desde
   el 2026-07-25 (ver DECISIONS.md) y despliega solo en cada push -- no
   hace falta correr `vercel --prod` a mano, pero el push si es un paso

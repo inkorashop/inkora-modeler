@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.18">
+<meta name="inkora-version" content="1.0.19">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="vendor/three.min.js"></script>
 <script src="vendor/BufferGeometryUtils.js"></script>
@@ -867,7 +867,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.18</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.19</span></div>
     <div class="sep"></div>
     <!-- Menú Archivo: nuevo, abrir, recientes, guardar, guardar como e
          importar. Exportar y abrir en laminador quedan afuera, sueltos en
@@ -1142,7 +1142,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.18').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.19').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -2371,6 +2371,79 @@ const DXFParser = (() => {
     return items;
   }
 
+  // Distancia máxima entre dos anillos de puntos ya muestreados (Hausdorff
+  // de ida y vuelta) — usada solo para detectar geometría prácticamente
+  // idéntica, no para tolerancias de diseño.
+  function maxRingDistance(ptsA, ptsB) {
+    function oneWay(a, b) {
+      let worst = 0;
+      for (const p of a) {
+        let best = Infinity;
+        for (const q of b) {
+          const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2;
+          if (d < best) best = d;
+        }
+        if (best > worst) worst = best;
+      }
+      return worst;
+    }
+    return Math.sqrt(Math.max(oneWay(ptsA, ptsB), oneWay(ptsB, ptsA)));
+  }
+
+  /* ── dedupeSiblingShapes ───────────────────────────────
+     CorelDRAW exporta un mismo objeto con relleno y contorno/trazo como DOS
+     entidades DXF separadas que trazan el mismo borde — una con el color del
+     relleno, otra con el color del trazo (confirmado en Cataratas.dxf: 10
+     pares así, mismo layer y mismo owner, un color ACI de relleno y otro de
+     contorno). El objeto en Corel es uno solo; DXF no tiene forma de
+     representar "relleno + contorno" en una sola entidad y lo parte en dos.
+
+     Esto es DISTINTO de la frontera coincidente de GEOMETRY_PIPELINE §13
+     (fondo + relleno superpuesto con roles de diseño distintos): ese patrón
+     siempre aparece entre PADRE e HIJO, con colores de capas diferentes. El
+     duplicado de relleno/contorno siempre aparece entre HERMANOS — mismo
+     padre, mismo nivel — así que deduplicar sólo ahí no puede confundir los
+     dos casos ni tocar huecos reales.
+
+     Sin este filtro, ambos hermanos se toman como huecos (o piezas) válidos
+     e independientes del mismo padre, y compiten por el mismo click/malla.
+
+     No toca ningún ítem marcado `isVoid`/`syntheticVoid`: applyMaterialVoids
+     ya deja a propósito un marcador de vacío geométricamente idéntico a un
+     hermano visible (ej. el hueco de un compuesto DXF conviviendo con la
+     entidad que lo dibuja) — dos roles distintos con la misma geometría,
+     exactamente el caso que este filtro no debe tocar.
+  ─────────────────────────────────────────────────────── */
+  function dedupeSiblingShapes(shapes, hierarchy) {
+    const removed = new Set();
+    const byLevel = new Map();
+    hierarchy.forEach((h, i) => {
+      if (shapes[i]?.isVoid || shapes[i]?.syntheticVoid) return;
+      const key = `${h.parentIdx}|${h.depth}`;
+      if (!byLevel.has(key)) byLevel.set(key, []);
+      byLevel.get(key).push(i);
+    });
+    byLevel.forEach(idxs => {
+      // Ordenar por área agrupa candidatos a duplicado (misma área) uno al
+      // lado del otro, así alcanza con comparar vecinos en vez de todos los
+      // pares — el chequeo caro de distancia sólo corre entre candidatos
+      // que ya matchean en área.
+      const sorted = [...idxs].sort((a, b) => hierarchy[a].area - hierarchy[b].area);
+      for (let k = 0; k < sorted.length - 1; k++) {
+        const i = sorted[k], j = sorted[k + 1];
+        if (removed.has(i)) continue;
+        const areaI = hierarchy[i].area, areaJ = hierarchy[j].area;
+        if (Math.abs(areaI - areaJ) > Math.max(areaI, areaJ, 1e-9) * 1e-3) continue;
+        if (maxRingDistance(hierarchy[i].pts, hierarchy[j].pts) > 0.01) continue;
+        // Se queda el que aparece después — mismo criterio de "lo de después
+        // es más autoritativo" que ya usa dedupeShapes.
+        removed.add(i);
+      }
+    });
+    if (!removed.size) return shapes;
+    return shapes.filter((_, i) => !removed.has(i));
+  }
+
   const DXF_COMPOUND_CONTAINMENT = 0.999;
 
   // Clave de "mismo estilo de pintura" para agrupar subtrazados de un mismo
@@ -2601,7 +2674,18 @@ const DXFParser = (() => {
       flat,
       'dxf-inferred'
     );
-    const hierarchy = computeHierarchy(flat.map(f => f.shape));
+    // dedupeSiblingShapes necesita padre/nivel para distinguir un duplicado
+    // de relleno+contorno (mismo padre, mismo nivel) de una frontera
+    // compartida entre capas de diseño (padre/hijo, GEOMETRY_PIPELINE §13),
+    // así que corre después de un primer computeHierarchy y, si sacó algo,
+    // hay que recalcularla sobre el set ya filtrado — los índices de padre
+    // apuntan a posiciones dentro de `flat`, que cambiaron.
+    let hierarchy = computeHierarchy(flat.map(f => f.shape));
+    const deduped = dedupeSiblingShapes(flat, hierarchy);
+    if (deduped.length !== flat.length) {
+      flat = deduped;
+      hierarchy = computeHierarchy(flat.map(f => f.shape));
+    }
     let gMinX = Infinity, gMaxX = -Infinity, gMinY = Infinity, gMaxY = -Infinity;
     flat.forEach(({ shape }) => {
       const b = shapeBounds(shape);
