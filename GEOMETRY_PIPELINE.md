@@ -566,6 +566,22 @@ puede cubrir el caso colineal exacto. La grilla canonica de Clipper es de
 anterior de `area2 < 1e-12` borraba cada tira delgada de un diseno con
 muchas curvas y dejaba la malla abierta al exportar.
 
+**Una frontera coincidente puede tener el hueco real un nivel mas abajo.**
+La regla de "hijo con la misma area no es hueco" solo miraba hijos directos
+(`depth+1`). En un diseno de tres capas (fondo, relleno de color con el
+mismo borde exterior que el fondo, hueco real hijo de ese relleno) el hueco
+quedaba invisible para el fondo: no es hijo directo suyo, es nieto. El fondo
+se extruia solido tapando el hueco, y su area de picking sin recortar
+competia de forma inconsistente (coplanar, area de bounding box casi
+identica) con la del hueco real — de ahi que clickear cerca del borde
+exterior funcionara pero clickear cerca del centro del trazo seleccionara
+todo. Encontrado en `Cataratas.dxf` sobre letras con contador (ej. la "A").
+`realHoleDescendants()` atraviesa transitivamente las capas de "misma
+frontera" sin consumirlas (siguen siendo su propia pieza, con su propio
+color y su propio hueco) hasta encontrar el hueco real. Reemplaza el filtro
+directo en los mismos puntos que la regla anterior, mas `addFaceTopology`
+(re-extrusion sobre piezas 3D) y `directHoleShapes` (preview 2D).
+
 ### Fixture de diseno por capas
 
 `Modelos/Cataratas.dxf` y `Modelos/Cataratas.svg` son el fixture denso: 5

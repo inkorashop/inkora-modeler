@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.17">
+<meta name="inkora-version" content="1.0.18">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="vendor/three.min.js"></script>
 <script src="vendor/BufferGeometryUtils.js"></script>
@@ -867,7 +867,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.17</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.18</span></div>
     <div class="sep"></div>
     <!-- Menú Archivo: nuevo, abrir, recientes, guardar, guardar como e
          importar. Exportar y abrir en laminador quedan afuera, sueltos en
@@ -1142,7 +1142,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.17').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.18').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -1492,8 +1492,18 @@ const DXFParser = (() => {
     // null = sin color explícito en el DXF (ByLayer sin color de capa, etc.)
     // — no se hornea acá un color fijo; se resuelve recién al mostrarlo,
     // según el tema activo (ver Utils.defaultContourColor).
-    const color = trueColorToHex(r[420]) || aciToHex(r[62]) || layerColors.get(layer) || null;
-    return { layer, color };
+    const trueColor = trueColorToHex(r[420]);
+    const aciColor = trueColor ? null : aciToHex(r[62]);
+    const color = trueColor || aciColor || layerColors.get(layer) || null;
+    // De DÓNDE salió el color, no sólo cuál es. Dos entidades pueden terminar
+    // en el mismo hex por caminos distintos (una con código 62 propio, otra
+    // heredándolo de la capa) y eso distingue objetos distintos de subtrazados
+    // del mismo objeto — ver dxfPaintStyleKey().
+    const colorSource = trueColor ? 'true'
+      : aciColor ? 'aci'
+      : color ? 'layer'
+      : 'none';
+    return { layer, color, colorSource };
   }
   function setShapeMeta(shape, meta = {}) {
     shape.userData = Object.assign({}, shape.userData, meta);
@@ -2144,6 +2154,88 @@ const DXFParser = (() => {
     return best || '';
   }
 
+  /* Traslada shapes ya construidos, mutando los puntos de control de cada
+     curva. Existe por rendimiento.
+
+     Clipper trabaja con enteros (coordenada x SCALE) y por encima de su
+     loRange (~4.7e7, o sea ~4745 mm con SCALE=10000) cambia a aritmetica de
+     128 bits emulada con BigInteger. Un DXF de Corel no trae el diseño en el
+     origen sino en las coordenadas de la pagina: el Yaguareté cae a ~9546 mm
+     del origen, cruza ese umbral y todo el import se hace por el camino
+     lento. Medido: 695 ms contra 288 ms del mismo archivo trasladado al
+     origen, sin ninguna otra diferencia.
+
+     No hay nada que deshacer despues: la posicion final del modelo la fija
+     offX/offY, que loadText() calcula al terminar sobre esta misma
+     geometria -- queda en ~0 y la malla se posiciona igual que antes.
+
+     Se aplica antes de cualquier trabajo booleano, incluido el dry-run de
+     buildDXFPaintItems(). Si aparece un tipo de curva que esta funcion no
+     sabe trasladar no se toca nada y se devuelve corrimiento cero: se pierde
+     la optimizacion, nunca la geometria.
+
+     El parser de SVG deliberadamente NO hace esto; ver el comentario en
+     SVGParser.loadText(). */
+  const TRANSLATABLE_CURVES = {
+    LineCurve:             c => [c.v1, c.v2],
+    QuadraticBezierCurve:  c => [c.v0, c.v1, c.v2],
+    CubicBezierCurve:      c => [c.v0, c.v1, c.v2, c.v3],
+    SplineCurve:           c => c.points,
+  };
+  function eachPathCurve(shape, visit) {
+    const paths = [shape, ...(shape.holes || [])];
+    for (const path of paths) {
+      for (const curve of (path.curves || [])) {
+        if (!visit(curve)) return false;
+      }
+    }
+    return true;
+  }
+  function recenterShapes(shapes) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    const supported = (shapes || []).every(shape => eachPathCurve(shape, curve => {
+      // Elipses y arcos: centro explícito, el resto de sus parámetros
+      // (radios, ángulos) es invariante a una traslación.
+      if (curve.type === 'EllipseCurve' || curve.type === 'ArcCurve') return true;
+      return !!TRANSLATABLE_CURVES[curve.type];
+    }));
+    if (!supported) return { dx: 0, dy: 0 };
+
+    (shapes || []).forEach(shape => {
+      shape.getPoints(32).forEach(p => {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      });
+    });
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return { dx: 0, dy: 0 };
+    const dx = (minX + maxX) / 2, dy = (minY + maxY) / 2;
+    if (dx === 0 && dy === 0) return { dx: 0, dy: 0 };
+
+    const moved = new Set();
+    (shapes || []).forEach(shape => eachPathCurve(shape, curve => {
+      if (curve.type === 'EllipseCurve' || curve.type === 'ArcCurve') {
+        curve.aX -= dx;
+        curve.aY -= dy;
+        return true;
+      }
+      TRANSLATABLE_CURVES[curve.type](curve).forEach(v => {
+        // Una curva comparte su punto de unión con la siguiente: sin esto se
+        // trasladaría dos veces y la figura quedaría rota.
+        if (moved.has(v)) return;
+        moved.add(v);
+        v.x -= dx;
+        v.y -= dy;
+      });
+      return true;
+    }));
+    // No hace falta invalidar ninguna cache de THREE: getPoints() recalcula
+    // cada punto desde los puntos de control, y lo unico que se cachea son
+    // longitudes de arco, invariantes ante una traslacion.
+    return { dx, dy };
+  }
+
   // La clave no incluye color. En diseños por capas o con curvas compuestas,
   // un exportador puede emitir la misma FRONTERA geométrica para dos roles
   // distintos (por ejemplo, hueco de una pieza inferior y borde de una
@@ -2170,6 +2262,9 @@ const DXFParser = (() => {
       const kept = seen.get(key);
       if (sh.userData?.color) {
         kept.userData.color = sh.userData.color;
+        // colorSource viaja pegado al color: describe de dónde salió ESE hex,
+        // así que heredar uno sin el otro deja una clave de estilo mentirosa.
+        kept.userData.colorSource = sh.userData.colorSource;
         kept.userData.layer = sh.userData.layer || kept.userData.layer;
       }
     });
@@ -2278,10 +2373,26 @@ const DXFParser = (() => {
 
   const DXF_COMPOUND_CONTAINMENT = 0.999;
 
+  // Clave de "mismo estilo de pintura" para agrupar subtrazados de un mismo
+  // objeto de Corel. Incluye el ORIGEN del color y no sólo el hex resuelto.
+  //
+  // El caso real: un objeto blanco apoyado sobre uno negro. Corel exporta
+  // ambos como ACI 7 — en DXF el 7 es "blanco o negro segun el fondo", no hay
+  // forma de distinguir el relleno — y quedaban con el mismo hex, en entidades
+  // consecutivas y con contencion total: exactamente el patron de un trazado
+  // compuesto. El blanco terminaba agrupado como subtrazado, o sea como
+  // agujero, y dejaba de poder seleccionarse y extruirse.
+  //
+  // El origen del color sí los separa: los subtrazados de un mismo objeto
+  // llevan siempre la misma especificacion de color (los dos anillos de una
+  // dona salen los dos con codigo 62 propio, o los dos ByLayer), mientras que
+  // dos objetos distintos que coinciden en el hex final suelen llegar por
+  // caminos distintos. Eso conserva los agujeros reales y libera las piezas.
   function dxfPaintStyleKey(shape) {
     const layer = shape.userData?.layer || '0';
     const color = normalizeHex(shape.userData?.color) || '';
-    return `${layer}|${color}`;
+    const source = shape.userData?.colorSource || 'none';
+    return `${layer}|${color}|${source}`;
   }
 
   // Corel exporta cada subtrazado de un objeto compuesto como una
@@ -2368,6 +2479,12 @@ const DXFParser = (() => {
   // un corte local simple de una pieza compuesta que contiene otros detalles.
   // No decide si existe un vacio global; esa decision se toma despues con
   // buildDXFMaterialItems() y la union total de material.
+  //
+  // Devuelve { items, resolved }. `resolved` es el resultado del dry-run
+  // cuando los items que salen son los mismos que entraron: en ese caso
+  // volver a resolverlos afuera daria exactamente lo mismo, y resolve() es
+  // ~48 ms de los ~290 del import. Cuando hay reagrupamiento queda en null y
+  // el llamador resuelve los items nuevos.
   function buildDXFPaintItems(shapes) {
     const rawItems = shapes.map((shape, idx) => rawDXFPaintItem(shape, idx));
     const dryRun = SVGVisibleGeometry.resolve(rawItems);
@@ -2375,7 +2492,7 @@ const DXFParser = (() => {
       dryRun.map(entry => (entry.elementId || '').split(':part:')[0])
     );
     const vanished = shapes.map((_, idx) => !survived.has(`dxf:${idx}`));
-    if (!vanished.some(Boolean)) return rawItems;
+    if (!vanished.some(Boolean)) return { items: rawItems, resolved: dryRun };
 
     const hierarchy = computeHierarchy(shapes);
     const container = shapes.map((_, idx) => {
@@ -2414,7 +2531,7 @@ const DXFParser = (() => {
       order.splice(insertAfter >= 0 ? insertAfter + 1 : order.length, 0, idx);
     });
 
-    return order.map(idx => {
+    const items = order.map(idx => {
       const rings = [hierarchy[idx].pts];
       shapes.forEach((_, holeIdx) => {
         if (!vanished[holeIdx] || isComposite[holeIdx]) return;
@@ -2431,6 +2548,7 @@ const DXFParser = (() => {
         elementId: `dxf:${idx}`,
       };
     });
+    return { items, resolved: null };
   }
 
   async function loadFile(file) {
@@ -2464,12 +2582,17 @@ const DXFParser = (() => {
 
     if (!shapes.length) return [];
 
+    // Antes de cualquier booleana: trabajar cerca del origen mantiene a
+    // Clipper en su camino rápido de 64 bits. offX/offY se calcula abajo
+    // sobre esta misma geometría, así que la posición final no cambia.
+    recenterShapes(shapes);
+
     // Segunda cesion: resolver visibilidad y hierarchy con muchos shapes puede tomar >16ms
     await new Promise(ok => setTimeout(ok, 0));
 
-    const paintItems = buildDXFPaintItems(shapes);
+    const paint = buildDXFPaintItems(shapes);
     const materialItems = buildDXFMaterialItems(shapes);
-    let flat = SVGVisibleGeometry.resolve(paintItems);
+    let flat = paint.resolved || SVGVisibleGeometry.resolve(paint.items);
 
     if (!flat.length) return [];
 
@@ -3233,6 +3356,20 @@ const SVGVisibleGeometry = (() => {
     return out;
   }
 
+  function pointsBounds(points) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of (points || [])) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return { minX, maxX, minY, maxY };
+  }
+  function boundsDisjoint(a, b) {
+    return a.minX > b.maxX || a.maxX < b.minX || a.minY > b.maxY || a.maxY < b.minY;
+  }
+
   // Fracción del área de `childPts` que queda contenida dentro de `parentPts`
   // (0..1), vía intersección booleana real con Clipper -- no un solo punto
   // de prueba. Usado por DXFParser para encontrar, dado un anillo que
@@ -3241,6 +3378,12 @@ const SVGVisibleGeometry = (() => {
   function overlapFraction(childPts, parentPts) {
     const lib = globalThis.ClipperLib;
     if (!lib?.Clipper || !lib?.ClipType) return 0;
+    // Los llamadores preguntan esto para cada par de contornos, o sea O(n²)
+    // booleanas de Clipper: 9621 llamadas y 176 ms en el Yaguareté, de lejos
+    // lo más caro del import. Dos cajas que no se tocan tienen intersección
+    // exactamente cero, así que este descarte no es una aproximación: da el
+    // mismo resultado sin construir los paths ni entrar a Clipper.
+    if (boundsDisjoint(pointsBounds(childPts), pointsBounds(parentPts))) return 0;
     const child = toClipperPath(childPts);
     const parent = toClipperPath(parentPts);
     if (!child || !parent) return 0;
@@ -3390,6 +3533,12 @@ const SVGParser = (() => {
       if (item.rings.length) paintItems.push(item);
     });
 
+    // Acá NO se recentra, a diferencia del DXF. Un SVG ya llega chico por su
+    // viewBox: medido, no cambia el tiempo (177 ms contra 182 ms, ruido),
+    // porque nunca cruza el umbral de 128 bits de Clipper. Y no es gratis:
+    // correr el trazado sobre otras coordenadas mueve el redondeo a entero
+    // de Clipper y la regresion lo detecta como una arista sobreusada en el
+    // OBJ de Cataratas. Sin beneficio y con costo, no se hace.
     let flat = SVGVisibleGeometry.resolve(paintItems);
 
     if (!flat.length) return [];
@@ -7317,20 +7466,43 @@ const PanelUI = (() => {
       childArea < parentArea * (1 - 1e-6);
   }
 
+  /* ── realHoleDescendants ──────────────────────────────
+     Un hijo directo con la misma área que su padre no encierra una región
+     interior: es la misma frontera vista desde el otro lado (GEOMETRY_
+     PIPELINE §13, "frontera coincidente"). Es el patrón normal de un diseño
+     por capas — fondo y relleno superpuesto con idéntico contorno exterior.
+     El hueco real de ese diseño puede estar un nivel más abajo, como hijo de
+     esa frontera duplicada (ej. el hueco de una letra, hijo del relleno de
+     color que a su vez comparte borde con el fondo oscuro debajo). Sin
+     atravesar esa capa intermedia, el hueco queda invisible desde el
+     contorno original: su material se extruye sin el recorte y, en modo
+     unido, tapa por completo el hueco real que otra capa sí dibuja bien.
+     No consume ni modifica la capa intermedia — sigue siendo su propia
+     pieza seleccionable, con su propio color y su propio hueco correcto —
+     esta función solo resuelve qué contornos deben restar material del
+     ancestro dado.
+  ─────────────────────────────────────────────────────── */
+  function realHoleDescendants(contours, parentIdx, parentDepth, parentShape) {
+    const result = [];
+    contours.forEach((candidate, cidx) => {
+      if (cidx === parentIdx || !candidate?.shape) return;
+      if (candidate._deleted || candidate.deleted) return;
+      if (candidate.parentIdx !== parentIdx) return;
+      if (candidate.depth !== parentDepth + 1) return;
+      if (enclosesInterior(parentShape, candidate.shape)) {
+        result.push(cidx);
+      } else {
+        result.push(...realHoleDescendants(contours, cidx, candidate.depth, parentShape));
+      }
+    });
+    return result;
+  }
+
   function directHoleShapes(contours, parentIdx) {
     const parent = contours[parentIdx];
     if (!parent) return [];
-    return contours
-      .filter((child, childIdx) =>
-        childIdx !== parentIdx &&
-        child?.shape &&
-        !child._deleted &&
-        !child.deleted &&
-        child.parentIdx === parentIdx &&
-        child.depth === parent.depth + 1 &&
-        enclosesInterior(parent.shape, child.shape)
-      )
-      .map(child => child.shape);
+    return realHoleDescendants(contours, parentIdx, parent.depth, parent.shape)
+      .map(idx => contours[idx].shape);
   }
 
   function pointInPolygon(pt, poly) {
@@ -7566,18 +7738,21 @@ const PanelUI = (() => {
         const shape = WindingUtils.makeShapeCCW(source.shape);
         const nestedShapes = [];
 
-        holeSources.forEach(holeIdx => {
+        /* Mismo criterio que absorbChildren al extruir (GEOMETRY_PIPELINE
+           §13): un anillo hijo con la misma area que su padre no encierra
+           una region interior, es la misma frontera vista desde el otro
+           lado. El hueco real puede estar un nivel mas abajo, hijo de esa
+           frontera duplicada — realHoleDescendants atraviesa esas capas
+           intermedias igual que al extruir, para no perder ese hueco.
+           `_holeIdxs` conserva el indice del hueco real aunque quede varios
+           niveles debajo del contorno raiz, asi que la restauracion tiene
+           que volver a resolver la misma cadena o reconstruye una pieza que
+           nunca existio. */
+        realHoleDescendants(snap.contours, sourceIdx, Number(source.depth), source.shape)
+          .filter(holeIdx => holeSources.has(holeIdx))
+          .forEach(holeIdx => {
           const hole = snap.contours[holeIdx];
-          if (!hole || hole.deleted || hole.parentIdx !== sourceIdx) return;
-          if (Number(hole.depth) !== Number(source.depth) + 1) return;
-          /* Mismo criterio que absorbChildren al extruir (GEOMETRY_PIPELINE
-             §13): un anillo hijo con la misma area que su padre no encierra
-             una region interior, es la misma frontera vista desde el otro
-             lado. Restarlo deja la pieza sin material y la union 2D vacia.
-             `_holeIdxs` conserva esos indices aunque la extrusion original
-             los haya descartado, asi que la restauracion tiene que volver a
-             filtrarlos o reconstruye una pieza que nunca existio. */
-          if (!enclosesInterior(source.shape, hole.shape)) return;
+          if (!hole || hole.deleted) return;
           shape.holes.push(WindingUtils.makeHoleCW(hole.shape));
 
           snap.contours.forEach((island, islandIdx) => {
@@ -7808,16 +7983,19 @@ const PanelUI = (() => {
         State.selectedFaces.set(idx, safeSelectionFace(State.contours[idx]));
       }
     });
-    // snap.panel / snap.extrudeMode sólo vienen presentes cuando el snapshot
-    // viene de un archivo de proyecto, otra pestaña o una versión reciente
-    // del historial. Snapshots antiguos siguen siendo compatibles.
+    // snap.panel sólo viene presente cuando el snapshot viene de un archivo
+    // de proyecto, otra pestaña o una versión reciente del historial.
+    // Snapshots antiguos siguen siendo compatibles.
     if (snap.panel) {
       const dEl = document.getElementById('ex-depth'), bEl = document.getElementById('ex-bevel'), bsEl = document.getElementById('ex-bseg');
       if (dEl && snap.panel.depth != null) dEl.value = snap.panel.depth;
       if (bEl && snap.panel.bevel != null) bEl.value = snap.panel.bevel;
       if (bsEl && snap.panel.bevelSeg != null) bsEl.value = snap.panel.bevelSeg;
     }
-    if (snap.extrudeMode) setExtrudeMode(snap.extrudeMode, false);
+    // El modo de extrusión (objetos separados / objeto unido) es una
+    // preferencia de trabajo, no un dato de la escena: Ctrl+Z/Ctrl+Y no le
+    // aplica y lo dejan como estaba. Sólo abrir un proyecto lo restaura —
+    // ver loadSnapshotIntoState.
     PanelUI.refreshContourVisuals();
     PanelUI._syncPieceSelection();
     PanelUI.renderList();
@@ -8011,6 +8189,9 @@ const PanelUI = (() => {
     withoutDirty(() => {
       History.clear();
       restoreSnapshot(snap);
+      // A diferencia de undo/redo, abrir un proyecto (o volver a una pestaña)
+      // sí debe adoptar su modo de extrusión guardado — ver restoreSnapshot.
+      if (snap.extrudeMode) setExtrudeMode(snap.extrudeMode, false);
       History.push(State);
       Viewport.focusAll();
     });
@@ -10099,16 +10280,14 @@ const PanelUI = (() => {
       solidIslandIdxs = []
     ) {
       const parent = State.contours[parentIdx];
-      State.contours.forEach((candidate, cidx) => {
+      realHoleDescendants(State.contours, parentIdx, parentDepth, parent.shape).forEach(cidx => {
+        const candidate = State.contours[cidx];
         if (candidate.extruded) return;
         if (absorbed.has(candidate)) return;
-        if (candidate.parentIdx !== parentIdx) return;
-        if (candidate.depth !== parentDepth + 1) return;
         // Si el usuario seleccionó este contorno, se extruirá como pieza independiente
         if (State.selectedIdxs.has(cidx)) return;
-        if (!enclosesInterior(parent.shape, candidate.shape)) return;
 
-        // Hueco directo → agregar como hole del shape padre (debe ser CW)
+        // Hueco real (posiblemente transitivo) → agregar como hole del shape padre (debe ser CW)
         const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
         holeIdxs.push(cidx);
@@ -10177,14 +10356,11 @@ const PanelUI = (() => {
       const absorbedHoles = holeIdxs.length;
 
       // Agregar interiores seleccionados como holes del exterior para evitar solapamiento
-      State.contours.forEach((candidate, cidx) => {
-        if (candidate === c) return;
+      realHoleDescendants(State.contours, cIdx, c.depth, c.shape).forEach(cidx => {
+        const candidate = State.contours[cidx];
         if (candidate.extruded) return;
-        if (candidate.parentIdx !== cIdx) return;
-        if (candidate.depth !== c.depth + 1) return;
         // Solo si también está seleccionado — se extruirá como pieza propia
         if (!selectedSet.has(candidate)) return;
-        if (!enclosesInterior(c.shape, candidate.shape)) return;
         const holePath = WindingUtils.makeHoleCW(candidate.shape);
         compositeShape.holes.push(holePath);
       });
@@ -10207,11 +10383,8 @@ const PanelUI = (() => {
       }
 
       if (merged2D) {
-        State.contours.forEach((candidate, cidx) => {
-          if (candidate === c) return;
-          if (!selectedSet.has(candidate)) return;
-          if (candidate.parentIdx !== cIdx) return;
-          if (candidate.depth !== c.depth + 1) return;
+        realHoleDescendants(State.contours, cIdx, c.depth, c.shape).forEach(cidx => {
+          if (!selectedSet.has(State.contours[cidx])) return;
           holeIdxs.push(cidx);
         });
         mergedItems.push({
@@ -10226,11 +10399,8 @@ const PanelUI = (() => {
       // pieza es el mismo elemento de la lista, no uno nuevo.
       const name = c.name || `Pieza ${String(State.pieces.length+1).padStart(2,'0')}`;
       // Guardar qué contornos fueron agregados como holes de esta pieza
-      State.contours.forEach((candidate, cidx) => {
-        if (candidate === c) return;
-        if (!selectedSet.has(candidate)) return;
-        if (candidate.parentIdx !== cIdx) return;
-        if (candidate.depth !== c.depth + 1) return;
+      realHoleDescendants(State.contours, cIdx, c.depth, c.shape).forEach(cidx => {
+        if (!selectedSet.has(State.contours[cidx])) return;
         holeIdxs.push(cidx);
       });
       const piece = GeoModule.makePiece({
@@ -10322,18 +10492,14 @@ const PanelUI = (() => {
       if (!source?.shape) return;
       const sourceDepth = Number(source.depth);
 
-      State.contours.forEach((hole, holeIdx) => {
+      // Mismo criterio que absorbChildren: un anillo hijo con la misma area
+      // que su padre no encierra un interior, es la misma frontera con otro
+      // rol (GEOMETRY_PIPELINE §13). realHoleDescendants atraviesa esas capas
+      // intermedias para no perder un hueco real un nivel más abajo.
+      realHoleDescendants(State.contours, sourceIdx, sourceDepth, source.shape).forEach(holeIdx => {
+        const hole = State.contours[holeIdx];
         if (!hole?.shape || hole._deleted || hole._isFakeContour) return;
-        if (hole.parentIdx !== sourceIdx) return;
-        if (Number.isFinite(sourceDepth) &&
-            Number.isFinite(Number(hole.depth)) &&
-            Number(hole.depth) !== sourceDepth + 1) return;
         if (holeIdxs.includes(holeIdx)) return;
-        // Mismo criterio que absorbChildren: un anillo hijo con la misma
-        // area que su padre no encierra un interior, es la misma frontera
-        // con otro rol. Restarlo deja la cara sin material y la re-extrusion
-        // aborta entera (ver GEOMETRY_PIPELINE, seccion 13).
-        if (!enclosesInterior(source.shape, hole.shape)) return;
 
         // Que el interior esté seleccionado por pertenecer a una pieza unida
         // no cambia su papel topológico: sigue perforando la cara exterior.

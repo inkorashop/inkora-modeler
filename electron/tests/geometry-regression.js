@@ -99,11 +99,14 @@ async function collectMetrics(win) {
       };
     }
 
+    // color undefined => sin codigo 62, o sea ByLayer: la entidad hereda el
+    // color de la capa. Es la diferencia que separa dos objetos distintos de
+    // los subtrazados de un mismo objeto compuesto.
     function dxfPolyline(points, color) {
       const tokens = [
         '0', 'LWPOLYLINE',
         '8', 'Test',
-        '62', String(color),
+        ...(color === undefined ? [] : ['62', String(color)]),
         '90', String(points.length),
         '70', '1',
       ];
@@ -113,8 +116,25 @@ async function collectMetrics(win) {
       return tokens;
     }
 
-    function dxfDocument(polylines) {
+    function dxfLayerTable(layerColor) {
       return [
+        '0', 'SECTION',
+        '2', 'TABLES',
+        '0', 'TABLE',
+        '2', 'LAYER',
+        '0', 'LAYER',
+        '2', 'Test',
+        '70', '0',
+        '62', String(layerColor),
+        '6', 'Continuous',
+        '0', 'ENDTAB',
+        '0', 'ENDSEC',
+      ];
+    }
+
+    function dxfDocument(polylines, layerColor) {
+      return [
+        ...(layerColor === undefined ? [] : dxfLayerTable(layerColor)),
         '0', 'SECTION',
         '2', 'ENTITIES',
         ...polylines.flatMap(polyline =>
@@ -151,6 +171,22 @@ async function collectMetrics(win) {
         { points: inner, color: 1 },
         { points: inner, color: 2 },
       ]);
+      // Un objeto blanco apoyado sobre uno negro. En DXF el ACI 7 es "blanco
+      // o negro segun el fondo": Corel exporta los dos con el mismo indice y
+      // el hex resuelto no los distingue. Lo que sí los distingue es el
+      // ORIGEN del color -- la base hereda de la capa, la pieza de arriba
+      // trae codigo 62 propio -- y sin eso el blanco se agrupaba como
+      // subtrazado, o sea como agujero, y no se podia seleccionar ni extruir.
+      const dxfWhiteOnBlack = dxfDocument([
+        { points: outer },              // ByLayer -> ACI 7 de la capa
+        { points: inner, color: 7 },    // objeto propio, tambien ACI 7
+      ], 7);
+      // Mismo dibujo, pero los dos anillos con codigo 62 propio: ahi sí son
+      // los subtrazados de un compuesto y el agujero tiene que sobrevivir.
+      const dxfSameSpecDonut = dxfDocument([
+        { points: outer, color: 7 },
+        { points: inner, color: 7 },
+      ], 7);
 
       return {
         svgExplicit: materialVoidSummary(await SVGParser.loadText(svgDonut)),
@@ -158,6 +194,8 @@ async function collectMetrics(win) {
         svgComposite: materialVoidSummary(await SVGParser.loadText(svgFrame)),
         dxfInferred: materialVoidSummary(await DXFParser.loadText(dxfDonut)),
         dxfFilled: materialVoidSummary(await DXFParser.loadText(dxfFilled)),
+        dxfWhiteOnBlack: materialVoidSummary(await DXFParser.loadText(dxfWhiteOnBlack)),
+        dxfSameSpecDonut: materialVoidSummary(await DXFParser.loadText(dxfSameSpecDonut)),
       };
     }
 
@@ -1664,6 +1702,13 @@ function validate(metrics) {
   }
   if (materialVoids.dxfFilled.voidCount !== 0) {
     failures.push('DXF conserva como hueco una region cubierta por otra entidad');
+  }
+  if (materialVoids.dxfWhiteOnBlack.voidCount !== 0) {
+    failures.push('DXF toma como hueco una pieza apoyada encima que comparte el ACI del fondo');
+  }
+  if (materialVoids.dxfSameSpecDonut.voidCount !== 1 ||
+      materialVoids.dxfSameSpecDonut.voidKinds[0] !== 'dxf-inferred') {
+    failures.push('DXF pierde el agujero de un compuesto cuyos anillos comparten especificacion de color');
   }
   if (metrics.svg.minArea < 1) {
     failures.push(`SVG conserva un residuo de solo ${metrics.svg.minArea.toFixed(6)} mm2`);

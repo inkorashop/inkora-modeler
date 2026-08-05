@@ -3,6 +3,210 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-05 — Hueco real invisible detrás de una frontera coincidente + Ctrl+Z reseteaba el modo de extrusión
+
+### Síntoma
+
+En `Cataratas.dxf` (diseño por capas denso), el hueco interior de algunas
+letras (ej. la "A") no se recortaba: seleccionarlo desde cerca del borde
+exterior funcionaba bien, pero clickear cerca del centro del trazo interno
+seleccionaba la pieza completa, sin hueco. Al extruir "Objeto unido", esa
+letra salía sólida en vez de con su hueco.
+
+### Causa raíz
+
+Ya existía la regla (GEOMETRY_PIPELINE §13): un hijo directo con la misma
+área que su padre no es un hueco, es la misma frontera vista desde el otro
+lado — típico de un diseño por capas (fondo oscuro + relleno de color
+superpuesto, mismo contorno exterior). Esa regla es correcta y se respetó.
+
+El bug: cuando el hueco *real* de esa letra no era hijo directo del fondo
+sino nieto (hijo de la capa de relleno superpuesta, que a su vez comparte
+borde con el fondo), el código solo miraba hijos directos (`depth+1`) para
+calcular huecos, en los 6 lugares que repetían ese patrón (`absorbChildren`,
+extrusión separada, extrusión unida ×2, re-extrusión sobre piezas 3D
+(`addFaceTopology`), reconstrucción de piezas al restaurar snapshot/proyecto,
+y el preview 2D `directHoleShapes`). El hueco quedaba invisible para el
+contorno de fondo: se extruía sólido tapando el hueco real, y su área de
+picking (sin recortar) competía de forma inconsistente con la del hueco
+real, coplanar y con área de bounding box casi idéntica — de ahí que el
+click a veces "ganara" un lado y a veces el otro según la posición exacta.
+
+### Solución
+
+`realHoleDescendants(contours, parentIdx, parentDepth, parentShape)`: recorre
+los hijos directos y, cuando uno no encierra interior (misma frontera que el
+padre), no lo descarta — sigue buscando huecos reales entre **sus** hijos,
+sin tocar ni consumir esa capa intermedia (sigue siendo su propia pieza
+seleccionable, con su propio color y su propio hueco correcto). Reemplaza el
+filtro directo (`depth === parent.depth + 1` + chequeo de encierro) en los 6
+sitios mencionados arriba.
+
+Verificado con un mapa de picking punto por punto sobre la letra afectada
+(antes: alternancia caótica de contornos en el borde del hueco; después:
+transición limpia y consistente) y con la regresión geométrica completa
+(`npm run test:geometry`): 0 fallos, 0 aristas no-manifold/winding
+inconsistente, laminado real en Bambu Studio sin errores.
+
+### Ctrl+Z reseteaba "objetos separados" / "objeto unido"
+
+Cada snapshot de `History` guardaba `extrudeMode`, así que deshacer/rehacer
+lo revertía junto con el resto del estado — aunque el usuario lo hubiera
+cambiado a propósito después de esa acción. Es una preferencia de trabajo,
+no un dato de la escena: se sacó la restauración de `extrudeMode` de
+`restoreSnapshot()` (compartida por undo/redo y por abrir proyecto/pestaña)
+y se dejó solo en `loadSnapshotIntoState()`, que es el camino específico de
+"abrir un documento" — ahí sí tiene sentido adoptar el modo guardado.
+
+## 2026-08-04 (seguimiento 5) - El import tardaba ~700 ms por estar lejos del origen
+
+### El sintoma
+
+Importar o pegar un diseño mostraba "Leyendo…" cerca de un segundo. Medido
+sobre `Modelos/Yaguarete.dxf`: **695 ms** dentro de `DXFParser.loadText()`.
+
+### Donde se iba el tiempo
+
+Perfil de V8 sobre tres corridas, sin instrumentar el codigo: el **90% del
+tiempo estaba adentro de ClipperLib**, y mas de la mitad del total en
+`bnpFromInt`, `Int128.Int128Mul` y `bnpSubTo` -- o sea **BigInteger**.
+
+Clipper trabaja con enteros (coordenada x SCALE, que acá es 10000) y por
+encima de su `loRange` (~4.7e7, o sea ~4745 mm) cambia a aritmetica de 128
+bits emulada con BigInteger. Corel no exporta el diseño en el origen sino en
+las coordenadas de la pagina: el Yaguarete cae a **~9546 mm** del origen del
+DXF. Cruza el umbral, y todo el import se hace por el camino lento.
+
+Comprobado antes de tocar nada: el mismo archivo con las coordenadas
+trasladadas al origen a mano baja de 695 ms a **288 ms**, y las funciones de
+BigInteger desaparecen del perfil.
+
+### Tres cambios, todos medidos
+
+1. **Resolver centrado en el origen** (`recenterShapes()` en DXFParser, antes
+   de cualquier booleana). No hay nada que deshacer: la posicion final la fija
+   `offX/offY`, que `loadText()` calcula al terminar sobre esa misma
+   geometria. Si aparece un tipo de curva que no sabe trasladar, no toca nada
+   y devuelve corrimiento cero -- se pierde la optimizacion, nunca la
+   geometria. **695 -> 288 ms.**
+
+2. **Descarte por caja en `overlapFraction()`**. Los llamadores la consultan
+   para cada par de contornos, o sea O(n²) booleanas: **9621 llamadas y 176
+   ms**, lo mas caro del import. Dos cajas que no se tocan tienen interseccion
+   exactamente cero, asi que el descarte no es una aproximacion: mismo
+   resultado sin construir los paths ni entrar a Clipper. **176 -> 40 ms.**
+
+3. **No resolver dos veces**. `buildDXFPaintItems()` hacia un dry-run de
+   `resolve()` y, cuando no habia nada que reagrupar, devolvia los mismos
+   items para que `loadText()` los resolviera otra vez -- ~48 ms repetidos.
+   Ahora devuelve `{ items, resolved }` y el llamador reusa el dry-run cuando
+   sirve.
+
+Medido en `DXFParser.loadText()`, mediana de cuatro corridas en caliente:
+
+| modelo | antes | despues |
+| --- | --- | --- |
+| Yaguarete.dxf | 695 ms | **174 ms** |
+| Cataratas.dxf | 1225 ms | **538 ms** |
+| Tucan.dxf | 51 ms | **28 ms** |
+
+La geometria queda identica: mismos contornos seleccionables, mismos vacios y
+mismas areas en los tres modelos, y la regresion completa en verde incluido
+el laminado real con Bambu Studio.
+
+### Lo que queda para una proxima vuelta
+
+En Cataratas el 86% de lo que queda (452 de 527 ms) esta en `resolve()`, el
+particionado de visibilidad por orden de pintado. Ahi el dry-run no se puede
+reusar porque el archivo si tiene contornos tapados y los items se
+reagrupan: son dos resoluciones distintas y las dos hacen falta.
+
+`resolve()` recorta cada item contra la union acumulada de todo lo que se
+pinto encima, que crece con cada item -- O(n²) en complejidad de poligono.
+El mismo descarte por caja que se aplico a `overlapFraction()` deberia servir
+ahi (un item cuya caja no toca la union acumulada no necesita recorte), pero
+es el corazon del contrato geometrico de la app y merece su propia vuelta con
+la regresion al lado, no un agregado al pasar.
+
+### Lo que se probo y se descarto: recentrar tambien el SVG
+
+Se aplico la misma idea en `SVGParser.loadText()`. **No sirve y hace daño**:
+un SVG ya llega chico por su viewBox y nunca cruza el umbral de 128 bits, asi
+que el tiempo no se movio (177 ms contra 182 ms, ruido). Pero correr el
+trazado sobre otras coordenadas mueve el redondeo a entero de Clipper, y la
+regresion lo detecto como **una arista sobreusada en el OBJ de Cataratas**.
+Sin beneficio y con costo: revertido, y anotado en el codigo para que no se
+vuelva a intentar.
+
+Vale como advertencia general: trasladar geometria antes de una booleana no
+es gratis, cambia el redondeo. Se hace donde el beneficio esta medido.
+
+## 2026-08-04 (seguimiento 4) - Las piezas blancas de un DXF no se podian seleccionar
+
+### El sintoma
+
+En `Modelos/Yaguarete.dxf` habia regiones que el programa no dejaba
+seleccionar ni extruir: no respondian al click. El mismo diseño en
+`Yaguarete.svg` funcionaba entero. Medido con el pipeline real, no a ojo:
+el DXF daba 66 contornos seleccionables y 10 vacios; el SVG, 118 y 1. Las
+regiones perdidas eran exactamente las 7 formas blancas del diseño (ojos,
+hocico, almohadillas), mas nada.
+
+### La causa
+
+No era el click ni el render: esas 7 formas llegaban marcadas
+`isVoid: 'dxf-inferred'`, y `Utils.isVisibleContour()` descarta todo
+`_isVoid`. O sea, el import las tomaba por agujeros.
+
+El DXF no guarda relleno. Peor: **en DXF el indice ACI 7 significa "blanco o
+negro segun el fondo"**, asi que Corel exporta con el mismo 7 tanto el negro
+del contorno como el blanco del relleno. Y la capa `Capa 1` tambien es color
+7, con lo cual la silueta -- que viene ByLayer, sin codigo 62 propio --
+resolvia al mismo `#ffffff` que las formas blancas. Entidades consecutivas,
+mismo hex, contencion total: exactamente la firma de un trazado compuesto de
+Corel. `buildDXFMaterialItems()` las agrupaba como subtrazados de la silueta,
+la union de material les quedaba como anillo impar y `applyMaterialVoids()`
+las marcaba vacio.
+
+### Decision: la clave de estilo incluye el ORIGEN del color, no solo el hex
+
+`dxfPaintStyleKey()` pasa de `capa|color` a `capa|color|origen`, donde origen
+es `true` (codigo 420), `aci` (codigo 62 propio), `layer` (heredado) o `none`.
+
+El criterio no es cosmetico: **los subtrazados de un mismo objeto llevan
+siempre la misma especificacion de color** -- los dos anillos de una dona
+salen los dos con 62 propio, o los dos ByLayer --, mientras que dos objetos
+distintos que casualmente coinciden en el hex final suelen llegar por caminos
+distintos. En el Yaguarete eso separa la silueta (ByLayer) de las 7 formas
+blancas (62 propio) sin tocar nada mas.
+
+Resultado medido: 66 -> **73 contornos seleccionables**, 10 -> 3 vacios. Los
+3 que quedan son el agujero real del llavero -- el mismo unico vacio que
+detecta el SVG, con la misma area -- y dos polilineas degeneradas de area ~0.
+Identico al resultado de repintar las 7 entidades a mano en el DXF, que fue
+como se valido la hipotesis antes de tocar codigo.
+
+`dedupeShapes()` ahora hereda `colorSource` junto con `color`: viajan
+pegados, y heredar uno sin el otro deja una clave de estilo mentirosa.
+
+### Lo que esto NO arregla
+
+Si el objeto de abajo tambien trajera codigo 62 propio con el mismo ACI, la
+ambiguedad vuelve: desde el DXF solo, ese caso es indistinguible de una dona.
+La salida de fondo para eso seria poder rescatar un vacio inferido desde la
+UI (convertirlo en pieza con un click). El codigo ya contempla el caso
+inverso -- un contorno seleccionado se extruye como pieza independiente en
+vez de absorberse como agujero -- pero hoy a un `_isVoid` no se lo puede
+seleccionar para llegar ahi.
+
+### Regresion
+
+Dos fixtures nuevos en `testMaterialVoidDetection()`, que son el par minimo
+del problema: `dxfWhiteOnBlack` (base ByLayer + pieza con 62 propio, mismo
+ACI 7) debe dar 0 vacios, y `dxfSameSpecDonut` (los dos anillos con 62
+propio) debe seguir dando 1. `dxfPolyline()` acepta color `undefined` para
+emitir ByLayer y `dxfDocument()` acepta un color de capa.
+
 ## 2026-08-04 (seguimiento 2) - Reimportar un diseño exportado
 
 ### Que se pedia
