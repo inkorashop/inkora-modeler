@@ -269,6 +269,24 @@ En 3D, el orden de picking es:
 Una linea no determina de que lado del borde hizo click el usuario y no debe
 ganar sobre una cara valida.
 
+En 2D, cuando dos contornos compiten por el mismo click con el mismo tamano
+y posicion (frontera coincidente, ver seccion 13), el desempate no es solo
+el area de bounding box: desde `v1.0.22`, un contorno fantasma
+(`_itemInternalHole`) pierde ese empate contra un contorno real cuando los
+dos son candidatos del mismo click -- sin eso, el desempate por area era
+una moneda determinista sin relacion con la intencion del usuario, y podia
+terminar extruyendo el fantasma en el lugar del contorno real, dejando a
+este ultimo inalcanzable por click de ahi en mas (un hit 3D siempre le gana
+al fallback 2D). El fantasma sigue siendo clickeable cuando es el unico
+candidato en ese punto: la regla resuelve una ambiguedad, no elimina el
+contorno ni cambia su geometria.
+
+Desde `v1.0.22`, toda pieza extruida -- fusione uno o varios contornos --
+resuelve su resaltado de seleccion por cara (overlays de sub-cara, ver
+`addMergedContourPickAreas`), nunca tinendo el mesh completo. Antes ese
+mecanismo solo se activaba con mas de un contorno fusionado, y una pieza de
+un solo contorno tenia todo el solido resaltado al seleccionarla.
+
 Importar DXF/SVG no encuadra la escena. Debe preservar posicion, orientacion,
 target orbital y zoom, ademas de cancelar animaciones pendientes. El encuadre
 continua siendo una accion explicita mediante `F`.
