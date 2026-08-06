@@ -3,6 +3,134 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-06 — Resaltado por cara + fantasma de frontera coincidente bloqueaba el click en piezas 2D adyacentes
+
+### 1. El resaltado de selección tiñe la pieza entera en vez de solo la cara
+
+**Síntoma:** al seleccionar una pieza extruida de un solo contorno (el caso
+normal al extruir de una en una), se resaltaba/oscurecía el sólido completo
+—tapas y laterales— en vez de solo la cara elegida.
+
+**Causa raíz:** `addMergedContourPickAreas()` (overlays invisibles por
+sub-cara que `refreshContourVisuals()` tiñe al seleccionar) solo se llamaba
+cuando una pieza fusionaba más de un contorno. Una pieza de un solo contorno
+nunca recibía esos overlays y caía en el camino viejo: `_syncPieceSelection()`
+llamaba `Viewport.setEmissive(piece.mesh, ...)` sobre el mesh completo.
+
+**Solución:** se llama siempre a `addMergedContourPickAreas()` (fusionada o
+no) en los tres sitios que construyen una pieza (extrusión nueva y las dos
+reconstrucciones de `restoreSnapshot`), y se renombra el flag
+`mesh.userData._mergedPiece` → `_facePicking`: ya no significa "es una
+fusión", significa "esta pieza resuelve su resaltado por cara".
+`_applyHighlight()` solo corta el teñido de mesh completo en modo
+**selección** cuando el flag está presente; el hover sigue igual para todas
+las piezas (antes no mostraba nada en piezas fusionadas; ahora se comporta
+igual en todas — no es una regresión, no había nada que perder ahí).
+
+Verificado en vivo con Camem.dxf: forzando opacidad 1 en el overlay de la
+tapa superior, solo la tapa cambia de color, laterales intactos. Confirmado
+también a nivel de datos (`mesh.material.color`/`emissiveIntensity` sin
+cambios al seleccionar; solo el overlay de la cara correspondiente activa
+`colorWrite`/opacidad). `npm run test:geometry` completo en verde, incluido
+`test3DFaceUndoRedo` (mismo offset de 0.05mm de estos overlays, sin tocar).
+
+### 2. Click en un contorno adyacente resolvía al fantasma, no al contorno real
+
+**Síntoma:** con un diseño por capas (fondo + letra encima, ej. `Camem.dxf`),
+extruir una pieza y luego clickear una pieza 2D adyacente todavía sin
+extruir (típicamente el hueco de una letra) a veces extruía una pieza de
+color equivocado en ese lugar, o dejaba esa pieza inalcanzable por click de
+ahí en más. Reportado como "hay errores, se fusionan colores, o a veces no
+permite seleccionar".
+
+**Contexto ya conocido (ver seguimiento 4 del 2026-08-05):** un contorno
+fantasma (`_itemInternalHole`, ver `SVGVisibleGeometry.resolve()`) puede
+ocupar exactamente el mismo lugar físico que un contorno real
+(`findSameSizeTwin`). El arreglo anterior solo cede el material del fantasma
+a su gemelo cuando **los dos se seleccionan y extruyen juntos en la misma
+acción** ("seleccionar todo"). Ese mismo seguimiento documentaba
+explícitamente como no resuelto el caso "extruir una capa, dejar la otra sin
+extruir, clickear esa otra capa" — exactamente el reporte de esta sesión.
+
+**Lo que faltaba:** el punto de falla real para el flujo "uno a la vez" es
+anterior a la extrusión, está en `Viewport.pickBest()` (rama 2D). Ante un
+click sobre un punto donde el fantasma y su gemelo real se solapan
+perfectamente (mismo tamaño, misma posición, ninguno extruido todavía), el
+desempate por "área de bounding-box ascendente" es una moneda determinística
+sin relación con la intención del usuario — resuelve siempre al mismo de los
+dos (confirmado con un raycast manual: ambos empataban en distancia y área).
+Si resolvía al fantasma y el usuario extruía, éste se volvía una pieza 3D
+real de color equivocado exactamente donde debía ir la pieza real, y esa
+pieza real quedaba inalcanzable por click (un hit 3D siempre le gana al
+fallback 2D) — confirmado extruyendo el fantasma a propósito y repitiendo el
+raycast: el punto pasa a resolver al nuevo piece 3D, nunca más al contorno
+real.
+
+**Solución:** `GeoModule.makeFlat()` marca el flatMesh con
+`userData._itemInternalHole`, igual que ya tiene el contorno.
+`Viewport.pickBest()`, en la rama 2D, separa los hits en "sin fantasma" y
+"fantasma": si el primer grupo no está vacío, el desempate por área ocurre
+solo ahí; si está vacío, cae al comportamiento anterior. Nunca deja algo
+inalcanzable — si el fantasma es el único candidato en ese punto, sigue
+siendo clickeable igual que antes — y no toca `resolve()`,
+`applyMaterialVoids()` ni el mecanismo de cesión por selección compartida,
+que sigue siendo necesario para "seleccionar todo".
+
+**Verificación:** reproducido en vivo primero (con el código viejo) antes de
+tocar nada: click sobre el contorno real de `Camem.dxf` resolvía al fantasma
+adyacente. Con el fix, el mismo click resuelve al contorno real y lo extruye
+con su color de diseño correcto. `electron/tests/geometry-regression.js`
+agrega `testAdjacentGhostPicking`: busca un par fantasma/gemelo genérico
+(sin hardcodear índices) en `Modelos/Camem.dxf`, dispara un click DOM real
+sobre un punto interior triangulado del contorno real, y exige que resuelva
+ahí. Confirmado que este caso falla limpiamente sin el fix (revertido
+temporalmente para probar). `npm run test:geometry` completo en verde.
+
+## 2026-08-06 (seguimiento) — Sistema de capas: unifica "Grupos" con dos capas automáticas 2D/3D
+
+La lista izquierda mezclaba contornos 2D y piezas 3D sin separación. El
+sistema de "Grupos" existente (tecla `g`, Ctrl+U, ya con header colapsable y
+rename por doble click) se unifica con un panel de capas estilo Corel, sin
+crear un segundo mecanismo paralelo:
+
+- **Terminología**: la interfaz dice "Capas", no "Grupos". `State.groups` y
+  `memberIdxs` quedan iguales por dentro — compatibilidad con `.inkora3d` e
+  `History` ya existentes, todo lo nuevo es de UI y comportamiento, no de
+  formato de datos.
+- **Dos capas automáticas fijas**, "Contornos 2D" / "Piezas 3D": todo lo que
+  no está en una capa propia, separado por tipo, recalculado en cada
+  `renderList()`. Siempre visibles aunque queden vacías (para seguir siendo
+  destino de arrastre); no se pueden renombrar ni borrar porque reflejan el
+  estado real del modelo, no una organización manual.
+- **Capas vacías permitidas**: antes solo existían grupos creados por
+  selección (nunca vacíos) y varios sitios los auto-borraban al quedar
+  vacíos (`case 'group'`, borrar pieza, borrar contorno 2D). Se quitó esa
+  poda: una capa solo se borra por acción explícita (botón "×" en el header,
+  o Ctrl+U sobre su selección) — nunca como efecto colateral de mover o
+  borrar sus elementos.
+- **Crear capa**: botón "+" junto al título de la sección, crea una capa
+  vacía y entra directo en modo renombrar (dispara el mismo `dblclick`
+  sintético que ya abre el input inline).
+- **Mover entre capas por drag&drop nativo** (HTML5 DnD): arrastrar una fila
+  (o toda la selección múltiple, si la fila arrastrada ya formaba parte de
+  ella) y soltarla sobre el header o los hijos de otra capa. Encontrado y
+  corregido en vivo durante la prueba: el `pointerdown` que selecciona al
+  apretar el botón colapsaba la selección múltiple a una sola fila *antes*
+  de que `dragstart` llegara a leerla, así que arrastrar una multi-selección
+  siempre soltaba solo 1 de N filas. Ahora `pointerdown` no colapsa la
+  selección cuando la fila ya es parte de una multi-selección y no hay
+  modificador — un `click` (que el navegador nunca dispara después de un
+  drag real) hace ese colapso si termina siendo un click simple sin
+  arrastre.
+
+Fuera de alcance deliberado: reordenar capas entre sí, y drag&drop táctil
+(uso de escritorio, mouse-first, igual que el resto del panel).
+
+Verificado manualmente en la app (crear, renombrar, colapsar, arrastrar 1 y
+2 elementos seleccionados entre capas propias y automáticas, borrar una capa
+y confirmar que sus elementos vuelven al bucket automático correcto) y con
+`npm run test:geometry` completo en verde.
+
 ## 2026-08-05 (seguimiento 4) — `dedupeSiblingShapes` en SVG, gemelo seguro en extrusión, deselección de frontera coincidente y offset de resaltado reducido
 
 Cuatro cambios sobre el mismo archivo real del usuario (`camem-reverso.svg` /
