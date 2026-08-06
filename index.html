@@ -634,6 +634,39 @@ kbd.mod{background:rgba(var(--accent-rgb),.07);color:rgba(var(--accent-rgb),.7);
 .group-children.open{display:block}
 .piece-item.in-group{padding-left:24px;border-left-width:1px}
 
+/* Capas automáticas (Contornos 2D / Piezas 3D): mismo armado que una capa
+   propia, pero de solo lectura -- nombre en cursiva para distinguirlas a
+   simple vista de las que el usuario puede renombrar o borrar. */
+.group-item.auto-layer .group-name{font-style:italic;color:var(--text-faint)}
+
+/* Borrar capa: oculto salvo hover, para no competir visualmente con el
+   nombre en la lectura normal de la lista. */
+.group-delete-btn{
+  display:none;
+  flex-shrink:0;width:15px;height:15px;line-height:14px;text-align:center;
+  border-radius:3px;color:var(--text-faint);font-size:12px;cursor:pointer;
+}
+.group-item:hover .group-delete-btn{display:inline-block}
+.group-delete-btn:hover{color:var(--danger);background:rgba(255,79,79,.12)}
+
+/* Nueva capa vacía */
+.layer-add-btn{
+  width:16px;height:16px;line-height:14px;text-align:center;
+  border:1px solid var(--border);border-radius:3px;
+  background:transparent;color:var(--text-faint);
+  font-family:var(--mono);font-size:12px;cursor:pointer;
+  transition:border-color .15s,color .15s,background .15s;
+}
+.layer-add-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-dim)}
+
+/* Arrastrar un elemento hacia otra capa (ver PanelUI._buildItem/_buildGroup) */
+.piece-item.dragging{opacity:.4}
+.drop-target > .group-item{
+  border-left-color:var(--accent);
+  background:rgba(var(--accent-rgb),.16);
+  outline:1px dashed var(--accent);outline-offset:-1px;
+}
+
 /* ── Rename input for groups ── */
 .group-name-input{
   flex:1;background:var(--bg);
@@ -1100,7 +1133,10 @@ html.light{
 
 
     <div class="section" style="padding-bottom:6px;border-bottom:none">
-      <div class="section-title">Contornos <span id="pieces-count" style="color:var(--text)">(0)</span></div>
+      <div class="section-title">
+        <span>Capas <span id="pieces-count" style="color:var(--text)">(0)</span></span>
+        <button type="button" class="layer-add-btn" id="btn-add-layer" title="Nueva capa">+</button>
+      </div>
     </div>
     <div class="sel-all-row" id="sel-all-row" style="display:none">
       <button class="btn" id="btn-sel-all">Todos</button>
@@ -6631,15 +6667,50 @@ function safeSelectionFace(c) {
 
 /* ══════════════════════════════════════════════════════
    MÓDULO 7 — UI DEL PANEL
-   Selección unificada (2D + 3D), grupos, multi-select,
-   Ctrl+click, Shift+click, renombrar, Ctrl+G/Ctrl+U.
-   EXTENSIÓN: drag&drop para reordenar, búsqueda.
+   Selección unificada (2D + 3D), capas (propias + automáticas
+   Contornos 2D/Piezas 3D), multi-select, Ctrl+click, Shift+click,
+   renombrar, tecla G/Ctrl+U, arrastrar entre capas.
+   EXTENSIÓN: reordenar capas entre sí, búsqueda.
    ══════════════════════════════════════════════════════ */
 const PanelUI = (() => {
   const NEUTRAL='#44445a', SEL='#7c6cff';
 
   // Índice del último contorno tocado (para Shift+click de rango)
   let _lastTouchedIdx = -1;
+
+  /* ── Capas ────────────────────────────────────────────────────────────
+     State.groups sigue siendo el modelo de datos persistido (compatibilidad
+     con .inkora3d e History ya existentes) — "capa" es como se lo llama en
+     la interfaz, capaz de estar vacía (antes solo existían grupos creados
+     por selección, nunca vacíos). Además de las capas de State.groups, la
+     lista siempre muestra dos capas automáticas de solo lectura ("Contornos
+     2D" / "Piezas 3D") con todo lo que no está en ninguna capa propia,
+     separado por tipo. No tienen entrada en State.groups: se recalculan en
+     cada renderList() y su colapso es una preferencia de sesión, no un dato
+     del proyecto. */
+  const AUTO_LAYER_2D = '__auto2d__';
+  const AUTO_LAYER_3D = '__auto3d__';
+  const _autoLayerCollapsed = { [AUTO_LAYER_2D]: false, [AUTO_LAYER_3D]: false };
+  function _isAutoLayerId(id) { return id === AUTO_LAYER_2D || id === AUTO_LAYER_3D; }
+
+  // Payload de un drag en curso (índices de contorno). Vive acá, no en
+  // dataTransfer: dataTransfer.getData solo es fiable en 'drop', y acá hace
+  // falta leerlo también en 'dragover' para decidir si mostrar el highlight.
+  let _dragIdxs = null;
+
+  // Saca los índices de TODAS las capas propias y, si el destino es una
+  // capa propia, los agrega ahí. Un destino automático (2D/3D) los deja sin
+  // capa: vuelven a aparecer agrupados solo por tipo. Nunca borra una capa
+  // por quedar vacía -- eso es una acción explícita (ver 'ungroup' y el
+  // botón de borrar capa), no un efecto colateral de mover elementos.
+  function _moveToLayer(idxs, targetGroupId) {
+    const idxSet = new Set(idxs);
+    State.groups.forEach(g => { g.memberIdxs = g.memberIdxs.filter(i => !idxSet.has(i)); });
+    if (!_isAutoLayerId(targetGroupId)) {
+      const target = State.groups.find(g => g.id === targetGroupId);
+      if (target) target.memberIdxs.push(...idxs);
+    }
+  }
 
   // Las subcaras de una pieza unida conservan indices propios para que el
   // picking y la re-extrusion sean precisos, pero la lista muestra una sola
@@ -6881,17 +6952,28 @@ const PanelUI = (() => {
     // Índices agrupados
     const groupedIdxs = new Set(State.groups.flatMap(g => g.memberIdxs));
 
-    // 1. Grupos primero
+    // 1. Capas propias primero
     State.groups.forEach(group => {
       wrap.appendChild(_buildGroup(group));
     });
 
-    // 2. Contornos no agrupados
+    // 2. Capas automáticas: todo lo que no está en una capa propia,
+    // separado por tipo. Siempre visibles (aunque queden vacías) para que
+    // sigan siendo un destino de drag&drop alcanzable.
+    const auto2D = [], auto3D = [];
     State.contours.forEach((c, idx) => {
-      if (groupedIdxs.has(idx)) return; // ya está en un grupo
+      if (groupedIdxs.has(idx)) return; // ya está en una capa propia
       if (!Utils.isPanelContour(c, idx)) return;
-      wrap.appendChild(_buildItem(c, idx, false));
+      (c.extruded ? auto3D : auto2D).push(idx);
     });
+    wrap.appendChild(_buildGroup({
+      id: AUTO_LAYER_2D, name: 'Contornos 2D',
+      collapsed: _autoLayerCollapsed[AUTO_LAYER_2D], memberIdxs: auto2D,
+    }));
+    wrap.appendChild(_buildGroup({
+      id: AUTO_LAYER_3D, name: 'Piezas 3D',
+      collapsed: _autoLayerCollapsed[AUTO_LAYER_3D], memberIdxs: auto3D,
+    }));
 
     updateSelCount(); updateHUD(); updateButtons();
 
@@ -6899,17 +6981,25 @@ const PanelUI = (() => {
     wrap.scrollTop = scrollTop;
   }
 
-  /* ── Construir un grupo ──────────────────────────────────────────────── */
+  /* ── Construir una capa (propia o automática) ──────────────────────────
+     Una capa automática (Contornos 2D / Piezas 3D) usa el mismo armado
+     visual que una capa propia -- header colapsable + hijos + destino de
+     drag&drop -- pero no se puede renombrar ni borrar, y su colapso vive en
+     _autoLayerCollapsed en vez de en group.collapsed (no tiene entrada
+     propia en State.groups). ─────────────────────────────────────────── */
   function _buildGroup(group) {
+    const isAuto = _isAutoLayerId(group.id);
+    const collapsed = isAuto ? _autoLayerCollapsed[group.id] : group.collapsed;
+
     const wrapper = document.createElement('div');
     wrapper.dataset.groupId = group.id;
 
     // ── Cabecera del grupo ──
     const header = document.createElement('div');
-    header.className = 'group-item' + (group._selGroup ? ' sel-group' : '');
+    header.className = 'group-item' + (group._selGroup ? ' sel-group' : '') + (isAuto ? ' auto-layer' : '');
 
     const arrow = document.createElement('span');
-    arrow.className = 'group-arrow' + (!group.collapsed ? ' open' : '');
+    arrow.className = 'group-arrow' + (!collapsed ? ' open' : '');
     arrow.textContent = '▶';
 
     const nameEl = document.createElement('span');
@@ -6921,11 +7011,29 @@ const PanelUI = (() => {
     countEl.textContent = `(${group.memberIdxs.filter(i => Utils.isPanelContour(State.contours[i], i)).length})`;
 
     header.append(arrow, nameEl, countEl);
+
+    if (!isAuto) {
+      const deleteBtn = document.createElement('span');
+      deleteBtn.className = 'group-delete-btn';
+      deleteBtn.textContent = '×';
+      deleteBtn.title = 'Borrar capa (los elementos vuelven a Contornos 2D / Piezas 3D)';
+      deleteBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        State.groups = State.groups.filter(g => g.id !== group.id);
+        History.push(State);
+        refreshContourVisuals();
+        renderList();
+        updateModeBadge();
+        updateColorPanel();
+      });
+      header.appendChild(deleteBtn);
+    }
+
     wrapper.appendChild(header);
 
     // ── Hijos ──
     const children = document.createElement('div');
-    children.className = 'group-children' + (!group.collapsed ? ' open' : '');
+    children.className = 'group-children' + (!collapsed ? ' open' : '');
     group.memberIdxs.forEach(idx => {
       const c = State.contours[idx];
       if (!Utils.isPanelContour(c, idx)) return;
@@ -6963,7 +7071,8 @@ const PanelUI = (() => {
         _syncPieceSelection();
         // Toggle collapse si el click fue en la flecha
         if (e.target === arrow || e.target.classList.contains('group-arrow')) {
-          group.collapsed = !group.collapsed;
+          if (isAuto) _autoLayerCollapsed[group.id] = !collapsed;
+          else group.collapsed = !collapsed;
         }
       }
       refreshContourVisuals();
@@ -6972,28 +7081,48 @@ const PanelUI = (() => {
       updateColorPanel();
     });
 
-    // ── Doble click: renombrar grupo ──
-    header.addEventListener('dblclick', e => {
-      e.stopPropagation();
-      const prev = group.name;
-      const inp = document.createElement('input');
-      inp.className = 'group-name-input';
-      inp.value = prev; inp.maxLength = 40;
-      nameEl.replaceWith(inp);
-      inp.focus(); inp.select();
-      function commit() {
-        const next = inp.value.trim() || prev;
-        group.name = next;
-        const span = document.createElement('span');
-        span.className = 'group-name'; span.textContent = next;
-        inp.replaceWith(span);
-        if (next !== prev) History.push(State);
-      }
-      inp.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
-        if (e.key === 'Escape') { inp.value = prev; inp.blur(); }
+    // ── Doble click: renombrar grupo (no aplica a capas automáticas) ──
+    if (!isAuto) {
+      header.addEventListener('dblclick', e => {
+        e.stopPropagation();
+        const prev = group.name;
+        const inp = document.createElement('input');
+        inp.className = 'group-name-input';
+        inp.value = prev; inp.maxLength = 40;
+        nameEl.replaceWith(inp);
+        inp.focus(); inp.select();
+        function commit() {
+          const next = inp.value.trim() || prev;
+          group.name = next;
+          const span = document.createElement('span');
+          span.className = 'group-name'; span.textContent = next;
+          inp.replaceWith(span);
+          if (next !== prev) History.push(State);
+        }
+        inp.addEventListener('keydown', e => {
+          if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+          if (e.key === 'Escape') { inp.value = prev; inp.blur(); }
+        });
+        inp.addEventListener('blur', commit);
       });
-      inp.addEventListener('blur', commit);
+    }
+
+    // ── Destino de drag&drop: soltar elementos arrastrados los mueve a
+    // esta capa (o, si es automática, los saca de cualquier capa propia). ──
+    wrapper.addEventListener('dragover', e => {
+      if (!_dragIdxs) return;
+      e.preventDefault();
+      wrapper.classList.add('drop-target');
+    });
+    wrapper.addEventListener('dragleave', () => wrapper.classList.remove('drop-target'));
+    wrapper.addEventListener('drop', e => {
+      e.preventDefault();
+      wrapper.classList.remove('drop-target');
+      if (!_dragIdxs || !_dragIdxs.length) return;
+      _moveToLayer(_dragIdxs, group.id);
+      _dragIdxs = null;
+      History.push(State);
+      renderList();
     });
 
     return wrapper;
@@ -7006,6 +7135,7 @@ const PanelUI = (() => {
     const item = document.createElement('div');
     item.className  = 'piece-item' + (inGroup ? ' in-group' : '');
     item.dataset.idx = idx;
+    item.draggable = true;
 
     const row1 = document.createElement('div');
     row1.className = 'p-row1';
@@ -7052,6 +7182,16 @@ const PanelUI = (() => {
       const i = parseInt(item.dataset.idx, 10);
       const ct = State.contours[i];
       if (!Utils.isVisibleContour(ct)) return;
+      /* Si esta fila ya es parte de una selección múltiple y no hay
+         modificador, no colapsarla todavía: podría ser el inicio de un
+         arrastre de TODA la selección (ver dragstart), y colapsar acá
+         perdería las demás filas antes de que dragstart llegue a leerlas
+         -- mismo criterio que un explorador de archivos. Si termina siendo
+         un click simple (sin arrastre), el listener de 'click' de más
+         abajo hace el colapso ahí, porque un click nunca se dispara
+         después de un drag real. */
+      if (!e.ctrlKey && !e.metaKey && !e.shiftKey &&
+          State.selectedIdxs.has(i) && State.selectedIdxs.size > 1) return;
       _selectOne(i, e.ctrlKey || e.metaKey, e.shiftKey ? _lastTouchedIdx : undefined);
       refreshContourVisuals();
       // Cambió la selección, no la lista: alcanza con repintar las filas
@@ -7060,6 +7200,46 @@ const PanelUI = (() => {
       refreshListSelection();
       updateModeBadge();
       updateColorPanel();
+    });
+
+    // Colapso diferido: ver el comentario de más arriba en pointerdown.
+    item.addEventListener('click', e => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey) return; // ya lo resolvió pointerdown
+      if (e.target.tagName === 'INPUT' || swatchWrap.contains(e.target)) return;
+      if (State.selectedIdxs.size <= 1) return; // pointerdown ya dejó la selección correcta
+      const i = parseInt(item.dataset.idx, 10);
+      const ct = State.contours[i];
+      if (!Utils.isVisibleContour(ct) || !State.selectedIdxs.has(i)) return;
+      _selectOne(i, false);
+      refreshContourVisuals();
+      refreshListSelection();
+      updateModeBadge();
+      updateColorPanel();
+    });
+
+    /* ── Mover entre capas: arrastrar esta fila (o, si ya forma parte de
+       una selección múltiple, todas las filas seleccionadas) y soltarla
+       sobre el header o los hijos de otra capa (ver _buildGroup). */
+    item.addEventListener('dragstart', e => {
+      const i = parseInt(item.dataset.idx, 10);
+      const ct = State.contours[i];
+      if (!Utils.isVisibleContour(ct)) { e.preventDefault(); return; }
+      if (!State.selectedIdxs.has(i)) {
+        _selectOne(i, false);
+        refreshContourVisuals();
+        refreshListSelection();
+        updateModeBadge();
+        updateColorPanel();
+      }
+      _dragIdxs = [...State.selectedIdxs];
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(i));
+      item.classList.add('dragging');
+    });
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      _dragIdxs = null;
+      document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target'));
     });
 
     // ── Doble click en el nombre: renombrar ──
@@ -7416,6 +7596,15 @@ const PanelUI = (() => {
     if (collapsedGroup) {
       collapsedGroup.collapsed = false;
       renderList();
+    } else if (!State.groups.some(g => g.memberIdxs.includes(rowIdx))) {
+      // No está en ninguna capa propia: vive en la capa automática que le
+      // corresponde por tipo -- si esa está colapsada, abrirla también.
+      const contour = State.contours[rowIdx];
+      const autoId = contour?.extruded ? AUTO_LAYER_3D : AUTO_LAYER_2D;
+      if (_autoLayerCollapsed[autoId]) {
+        _autoLayerCollapsed[autoId] = false;
+        renderList();
+      }
     }
     const el = document.querySelector(`.piece-item[data-idx="${rowIdx}"]`);
     if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -7552,8 +7741,8 @@ const PanelUI = (() => {
       State.selectedFaces.delete(i);
     });
 
+    // Una capa que quede vacía por esto no se borra sola (ver _moveToLayer).
     State.groups.forEach(g => { g.memberIdxs = g.memberIdxs.filter(i => !idxs.includes(i)); });
-    State.groups = State.groups.filter(g => g.memberIdxs.length > 0);
 
     refreshContourVisuals(); renderList();
     updateButtons(); updateModeBadge(); updateColorPanel();
@@ -9157,10 +9346,10 @@ const PanelUI = (() => {
       // Historial
       { id:'undo',        group:'Historial',  desc:'Deshacer',                   key:'z',         ctrl:true,  shift:false, alt:false },
       { id:'redo',        group:'Historial',  desc:'Rehacer',                    key:'z',         ctrl:true,  shift:true,  alt:false },
-      // Grupos
+      // Capas
       // Agrupar dejó Ctrl+G libre para Guardar (ver migración del keymap).
-      { id:'group',       group:'Grupos',     desc:'Agrupar selección',           key:'g',         ctrl:false, shift:false, alt:false },
-      { id:'ungroup',     group:'Grupos',     desc:'Desagrupar',                  key:'u',         ctrl:true,  shift:false, alt:false },
+      { id:'group',       group:'Capas',      desc:'Nueva capa con la selección', key:'g',         ctrl:false, shift:false, alt:false },
+      { id:'ungroup',     group:'Capas',      desc:'Quitar de la capa',          key:'u',         ctrl:true,  shift:false, alt:false },
       // Archivo
       { id:'import',      group:'Archivo',    desc:'Importar DXF/SVG/3MF/OBJ',   key:'i',         ctrl:true,  shift:false, alt:false },
       { id:'openProject', group:'Archivo',    desc:'Abrir proyecto',             key:'o',         ctrl:true,  shift:false, alt:false },
@@ -9612,10 +9801,10 @@ const PanelUI = (() => {
           State.selectedPieceIdx = null;
           State.selectedIdxs.clear();
           State.selectedFaces.clear();
-          // Limpiar el contorno del idx eliminado de todos los grupos
+          // Limpiar el contorno del idx eliminado de todas las capas. Una
+          // capa que quede vacía por esto no se borra sola (ver _moveToLayer).
           if (cIdx !== -1) {
             State.groups.forEach(g => { g.memberIdxs = g.memberIdxs.filter(i => i !== cIdx); });
-            State.groups = State.groups.filter(g => g.memberIdxs.length > 0);
           }
           TransformModule.deselect(); TransformModule.hidePanel();
           PanelUI.refreshContourVisuals(); PanelUI.renderList();
@@ -9658,43 +9847,47 @@ const PanelUI = (() => {
         }
 
         case 'group': {
-          // Agrupar todos los contornos seleccionados (2D y 3D, excepto absorbidos)
+          // Agregar los contornos seleccionados (2D y 3D, excepto absorbidos)
+          // a una capa nueva. Alcanza con 1: una capa puede tener un solo
+          // elemento, igual que puede quedar vacía (ver btn-add-layer).
           const toGroup = [...State.selectedIdxs].filter(i => {
             const c = State.contours[i];
             return Utils.isVisibleContour(c);
           });
-          if (toGroup.length < 2) { Utils.toast('Seleccioná 2 o más elementos para agrupar.'); break; }
-          // Quitar de grupos existentes
+          if (toGroup.length < 1) { Utils.toast('Seleccioná algo para agregar a una capa nueva.'); break; }
+          // Quitar de capas existentes -- una capa que quede vacía por esto
+          // no se borra sola (ver _moveToLayer, mismo criterio).
           State.groups.forEach(g => {
             g.memberIdxs = g.memberIdxs.filter(i => !toGroup.includes(i));
           });
-          State.groups = State.groups.filter(g => g.memberIdxs.length > 0);
           const newGroup = {
             id: State._nextGroupId++,
-            name: `Grupo ${State._nextGroupId - 1}`,
+            name: `Capa ${State._nextGroupId - 1}`,
             collapsed: false,
             memberIdxs: toGroup,
           };
-          State.groups.push(newGroup);
+          State.groups.unshift(newGroup);
           History.push(State);
           PanelUI.renderList();
-          Utils.toast(`Grupo creado con ${toGroup.length} elementos.`, 'ok');
+          Utils.toast(`Capa creada con ${toGroup.length} elemento(s).`, 'ok');
           break;
         }
 
         case 'ungroup': {
-          // Desagrupar: encontrar grupos que tengan algún miembro seleccionado
+          // Quitar de su capa: encontrar capas que tengan algún miembro
+          // seleccionado y borrarlas -- sus elementos no se borran, vuelven
+          // a Contornos 2D / Piezas 3D según corresponda.
           const toRemove = new Set();
           State.groups.forEach(g => {
             if (g.memberIdxs.some(i => State.selectedIdxs.has(i))) {
               toRemove.add(g.id);
             }
           });
-          if (!toRemove.size) { Utils.toast('Seleccioná un grupo para desagrupar.'); break; }
+          if (!toRemove.size) { Utils.toast('Seleccioná algo dentro de una capa para quitarlo.'); break; }
           State.groups = State.groups.filter(g => !toRemove.has(g.id));
           History.push(State);
           PanelUI.renderList();
-          Utils.toast('Desagrupado.', 'ok');
+          Utils.toast('Capa quitada.', 'ok');
           break;
         }
 
@@ -11014,6 +11207,23 @@ const PanelUI = (() => {
 
   document.getElementById('btn-sel-all').addEventListener('click',()=>{PanelUI.selectAll();PanelUI.updateModeBadge();});
   document.getElementById('btn-sel-none').addEventListener('click',()=>{PanelUI.selectNone();PanelUI.updateModeBadge();});
+
+  // Nueva capa vacía: aparece arriba de todo y entra directo en modo
+  // renombrar (mismo camino que el doble click sobre el nombre de una
+  // capa existente — ver PanelUI._buildGroup).
+  document.getElementById('btn-add-layer').addEventListener('click', () => {
+    const newGroup = {
+      id: State._nextGroupId++,
+      name: `Capa ${State._nextGroupId - 1}`,
+      collapsed: false,
+      memberIdxs: [],
+    };
+    State.groups.unshift(newGroup);
+    History.push(State);
+    PanelUI.renderList();
+    document.querySelector(`[data-group-id="${newGroup.id}"] .group-item`)
+      ?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  });
 
   document.getElementById('btn-clear').addEventListener('click',()=>{
     PanelUI.clearAllSelection();
