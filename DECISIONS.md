@@ -3,6 +3,131 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-05 (seguimiento 4) — `dedupeSiblingShapes` en SVG, gemelo seguro en extrusión, deselección de frontera coincidente y offset de resaltado reducido
+
+Cuatro cambios sobre el mismo archivo real del usuario (`camem-reverso.svg` /
+`camem-reverso.dxf`), todos derivados de la misma familia de patrones ya
+documentada en el seguimiento anterior (frontera coincidente, borde-de-hueco
+como pieza propia). Se prueban juntos: `npm run test:geometry` completo en
+verde después de cada cambio individual y después de la combinación final.
+
+### 1. `dedupeSiblingShapes` también corre en SVG
+
+**Síntoma:** en `camem-reverso.svg`, "seleccionar todo" dejaba una sombra
+visible (triángulo grande, no degenerado) sobre el fondo, y la letra "R" no
+cortaba su hueco interior al seleccionarla.
+
+**Causa raíz:** el seguimiento anterior asumió que SVG no sufre el patrón de
+hermanos duplicados porque Corel exporta un `<path>` compuesto por color (sin
+la duplicación relleno/trazo del exportador DXF). Cierto para ESE mecanismo,
+pero `resolve()` tiene un mecanismo de duplicado propio e independiente,
+también presente en SVG: cuando la región visible de un ítem queda
+multiplemente conexa después de restarle lo pintado encima, CADA anillo
+(borde real y bordes de hueco) se emite como pieza positiva propia — ver
+`_itemInternalHole`. En `camem-reverso.svg` esto generaba 5 pares de
+hermanos con geometría idéntica (mismo padre, mismo nivel), que earcut
+(`ShapeGeometry`) trianguló generando triángulos-puente grandes entre los
+dos anillos superpuestos — la sombra visible — y que además duplicaban la
+selección del hueco de la "R", impidiendo que se recortara.
+
+**Solución:** `dedupeSiblingShapes()` (ya existía para DXF) ahora corre
+también en `SVGParser.loadText()`, después de `applyMaterialVoids()`, con el
+mismo criterio y la misma guarda de `isVoid`/`syntheticVoid`. `DXFParser`
+expone la función en su return para reuso directo, sin duplicar código.
+
+**Verificación:** pares hermanos en `camem-reverso.svg` 5 → 0. Sombra
+desaparece en captura de pantalla. Selección de "R" corta su hueco
+correctamente. Suite completa en verde (Tucán, Cataratas, sintéticos).
+
+### 2. Gemelo de frontera coincidente, cesión segura en extrusión
+
+Retoma el "Intento 2" descartado en el seguimiento anterior
+(`findSameSizeTwin` + cesión de material), pero con la guarda que faltaba:
+la cesión sólo ocurre si el gemelo **también está en el `selected` de esta
+misma acción de extrusión** (`selectedSet.has(State.contours[twinIdx])`).
+Matemáticamente nunca pierde material — si se cede es porque el gemelo,
+presente en la misma pasada, lo aporta — y no afecta una selección
+individual deliberada (`PanelUI.selectOne` de un solo contorno, como hace
+`testBeveled3MFFlow`) porque ahí el gemelo nunca está en `selected`.
+
+Resuelve el bloqueo de click en piezas 2D adyacentes específicamente para el
+flujo "Seleccionar todo" → extruir: ya no queda una pieza 3D fantasma
+duplicada tapando huecos de letras de otra capa. Validado con captura de
+pantalla de "seleccionar todo" en Camem DXF y SVG — sin sombras, huecos de
+letras correctos, toast "N contorno(s) cubiertos por sus piezas internas"
+(mecanismo `coveredByChildren` ya existente, reusado).
+
+**Sigue sin resolver** (ver seguimiento anterior): extruir sólo una capa de
+color, dejar la otra sin extruir, y clickear esa otra capa — ahí el gemelo
+NO está en `selected` (fue una extrusión previa, no la misma acción), así
+que no se cede nada y el fantasma puede seguir bloqueando el click. Ese caso
+necesita una señal real de intención del usuario (ej. distinguir
+"seleccionar todo" de una selección manual), no implementada.
+
+### 3. Click para deseleccionar también suelta el gemelo de frontera coincidente
+
+**Síntoma:** con "Seleccionar todo" activo, Ctrl+click para deseleccionar el
+interior de una letra a veces deselecciona algo pero deja "algo más"
+resaltado en el mismo lugar — parecía que el click no hacía nada.
+
+**Causa raíz:** un contorno con frontera coincidente (mismo lugar físico,
+dos objetos: ej. el borde de un hueco que `resolve()` expone como pieza
+propia, y el objeto real que ocupa ese lugar) puede estar AMBOS
+seleccionados a la vez después de "Seleccionar todo" — es correcto que
+ambos se seleccionen, cada uno aporta su rol en la geometría. Pero
+`pickBest()` (picking 2D: gana el mesh de menor área de bounding box, y ante
+empate de área — que acá siempre hay, misma geometría exacta — el orden de
+`Array.prototype.sort` es estable y determinista según el orden de recorrido
+de la escena) resuelve el click SIEMPRE al mismo de los dos. Ctrl+click para
+sacar uno de la selección deja al otro seleccionado, indistinguible a
+simple vista del primero porque ocupan exactamente el mismo lugar.
+
+**Solución:** en el handler de click (`Viewport.onClickMesh`, sólo picks 2D,
+sólo Ctrl+click, sólo cuando el click efectivamente deselecciona), si el
+contorno recién deseleccionado tiene un gemelo (`findSameSizeTwin`) que
+sigue seleccionado, se deselecciona también. No se aplica a picks 3D ni a
+selección simple (click sin Ctrl ya limpia todo).
+
+**Verificación:** script de diagnóstico dispara un click DOM real (mismo
+código de producción, no una llamada directa a `toggleSel`) sobre un par de
+frontera coincidente encontrado dentro de la selección tras "Seleccionar
+todo", en Camem DXF y SVG — ambos miembros del par quedan deseleccionados
+juntos, cero pares "partidos" (uno seleccionado, el otro no) en todo el
+archivo después del click. Suite completa en verde.
+
+### 4. Offset del resaltado de selección: 0.16mm → 0.05mm
+
+**Síntoma:** el relleno que resalta la cara seleccionada (mismo mesh que las
+áreas de click de `addMergedContourPickAreas`, ver `refreshContourVisuals`)
+se veía visiblemente despegado de la superficie real — un "escalón"/sombra
+por encima de la pieza en vez de pegado a la cara.
+
+**Causa:** ese mesh vive en `z = profundidad ± 0.16mm` a propósito, para
+separarlo de la superficie real y evitar z-fighting en el picking — pero
+0.16mm es suficiente para notarse a simple vista como una capa flotante.
+
+**Solución:** reducido a 0.05mm, mismo mecanismo, sin tocar nada más.
+Probado primero a 0.02mm: rompe `test3DFaceUndoRedo` (picking de cara 3D
+junto a un borde deja de ser estable entre la extrusión original y la
+re-extrusión después de UNDO). 0.08mm y 0.05mm pasan la suite completa;
+se eligió 0.05mm por dar más margen visual sin reintroducir el problema.
+**No bajar de 0.05mm sin volver a correr esa prueba específica.**
+
+### Efecto colateral notado, no corregido: triángulos-puente de earcut
+
+Al investigar la sombra del punto 1, se confirmó que `ShapeGeometry`
+(earcut) puede generar triángulos grandes y reales (no degenerados) que
+conectan puntos lejanos del borde cuando una forma tiene muchos huecos —
+presente tanto en Camem como en Cataratas (160/1884 triángulos "sospechosos"
+por un heurístico de lado >5mm en Cataratas). Empíricamente, arreglar el
+duplicado de hermanos en SVG también hizo desaparecer la sombra visible de
+Camem, sugiriendo que geometría duplicada/superpuesta puede ser lo que
+confunde a earcut en al menos algunos casos — pero no se confirmó que TODOS
+los triángulos sospechosos de Cataratas sean visualmente defectuosos (el
+heurístico probablemente sobre-cuenta triángulos grandes pero legítimos).
+Deliberadamente no investigado más a fondo esta sesión — necesita su propio
+repro mínimo y no es seguro de apurar.
+
 ## 2026-08-05 (seguimiento 3) — Vacío duplicado en `applyMaterialVoids` (Camem) + dos intentos descartados de arreglar el bloqueo de click
 
 ### Síntoma (arreglado)

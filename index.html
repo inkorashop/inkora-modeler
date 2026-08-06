@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.20">
+<meta name="inkora-version" content="1.0.21">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="vendor/three.min.js"></script>
 <script src="vendor/BufferGeometryUtils.js"></script>
@@ -867,7 +867,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.20</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.21</span></div>
     <div class="sep"></div>
     <!-- Menú Archivo: nuevo, abrir, recientes, guardar, guardar como e
          importar. Exportar y abrir en laminador quedan afuera, sueltos en
@@ -1142,7 +1142,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.20').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.21').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -2705,12 +2705,13 @@ const DXFParser = (() => {
       voidKind:  f.voidKind || null,
       voidArea:  Number(f.voidArea) || 0,
       syntheticVoid: !!f.syntheticVoid,
+      _itemInternalHole: !!f._itemInternalHole,
     }));
   }
   // computeHierarchy es puramente geométrica (point-in-polygon sobre shapes
   // ya construidos) — no depende de nada específico de DXF. Se expone para
   // que SVGParser la reutilice en vez de reimplementar detección de huecos.
-  return {loadFile, loadText, computeHierarchy, dedupeShapes};
+  return {loadFile, loadText, computeHierarchy, dedupeShapes, dedupeSiblingShapes};
 })();
 
 /* ══════════════════════════════════════════════════════
@@ -3319,6 +3320,15 @@ const SVGVisibleGeometry = (() => {
         layer: item.layer,
         color: item.color,
         elementId: visibleElementId(item.elementId, hierarchy, pathIdx),
+        // Un anillo con profundidad impar DENTRO de la visibilidad propia de
+        // este item es el borde de un hueco (algo de OTRO item lo cubre),
+        // expuesto como su propia pieza para que applyMaterialVoids() pueda
+        // evaluarlo como candidato a vacío. Si no resulta vacío, sigue
+        // existiendo como contorno propio -- necesario para la "frontera
+        // coincidente" de GEOMETRY_PIPELINE §13 -- pero es sólo metadato
+        // para desempatar en extrusión (ver findSameSizeTwin): nunca se usa
+        // para descartar geometría acá ni en applyMaterialVoids.
+        _itemInternalHole: hierarchy[pathIdx].depth % 2 === 1,
       })).filter(entry => entry.shape.curves.length >= 3);
     });
   }
@@ -3653,7 +3663,22 @@ const SVGParser = (() => {
 
     await new Promise(ok => setTimeout(ok, 0));
 
-    const hierarchy = DXFParser.computeHierarchy(flat.map(f => f.shape));
+    // resolve() expone el borde de un hueco interior como su propia pieza
+    // positiva (para que applyMaterialVoids la evalúe como candidato a
+    // vacío) — si un path SVG compuesto por varias letras es multiply-
+    // connected, ese borde puede sobrevivir como hermano exacto (mismo
+    // padre, mismo nivel) del hueco/contorno real que representa lo mismo,
+    // sin ser un vacío real. Mismo patrón que dedupeSiblingShapes ya resuelve
+    // para DXF (ahí por relleno+contorno duplicados por Corel; acá por este
+    // mecanismo de resolve()), así que se reusa la misma función — ya
+    // protegida contra tocar isVoid/syntheticVoid y contra fronteras
+    // compartidas padre-hijo (GEOMETRY_PIPELINE §13).
+    let hierarchy = DXFParser.computeHierarchy(flat.map(f => f.shape));
+    const deduped = DXFParser.dedupeSiblingShapes(flat, hierarchy);
+    if (deduped.length !== flat.length) {
+      flat = deduped;
+      hierarchy = DXFParser.computeHierarchy(flat.map(f => f.shape));
+    }
     let gMinX = Infinity, gMaxX = -Infinity, gMinY = Infinity, gMaxY = -Infinity;
     flat.forEach(({ shape }) => {
       shape.getPoints(64).forEach(p => {
@@ -3675,6 +3700,7 @@ const SVGParser = (() => {
       voidKind: f.voidKind || null,
       voidArea: Number(f.voidArea) || 0,
       syntheticVoid: !!f.syntheticVoid,
+      _itemInternalHole: !!f._itemInternalHole,
     }));
   }
 
@@ -6370,6 +6396,7 @@ const History = (() => {
         voidKind: c._voidKind || null,
         voidArea: Number(c._voidArea) || 0,
         syntheticVoid: !!c._syntheticVoid,
+        _itemInternalHole: !!c._itemInternalHole,
         sel2D:   c.sel2D,
         extruded: c.extruded,
         depthOverride: c.depthOverride ?? null,  // profundidad individual por contorno
@@ -7562,6 +7589,56 @@ const PanelUI = (() => {
       childArea < parentArea * (1 - 1e-6);
   }
 
+  function maxRingDistanceApp(ptsA, ptsB) {
+    function oneWay(a, b) {
+      let worst = 0;
+      for (const p of a) {
+        let best = Infinity;
+        for (const q of b) {
+          const d = (p.x - q.x) ** 2 + (p.y - q.y) ** 2;
+          if (d < best) best = d;
+        }
+        if (best > worst) worst = best;
+      }
+      return worst;
+    }
+    return Math.sqrt(Math.max(oneWay(ptsA, ptsB), oneWay(ptsB, ptsA)));
+  }
+
+  /* ── findSameSizeTwin ──────────────────────────────────
+     Un contorno con la misma área y geometría exacta que su padre o un
+     hijo directo (ninguno es hueco real del otro, per enclosesInterior) es
+     el mismo lugar físico visto desde dos objetos distintos — "frontera
+     coincidente" (GEOMETRY_PIPELINE §13): el borde de un hueco que
+     resolve() expone como su propia pieza (ver SVGVisibleGeometry,
+     `_itemInternalHole`) y el objeto real que ocupa exactamente ese lugar
+     (ej. una letra sobre el fondo). Ambos existen como contornos propios a
+     propósito — el Tucán necesita conservar los dos para que
+     realHoleDescendants encuentre huecos reales más abajo — pero sólo UNO
+     de los dos debe aportar material sólido en el mismo lugar cuando LOS
+     DOS se extruyen juntos en la misma acción.
+  ─────────────────────────────────────────────────────── */
+  function findSameSizeTwin(c, cIdx) {
+    const candidates = [];
+    if (c.parentIdx !== -1) candidates.push(c.parentIdx);
+    State.contours.forEach((other, idx) => {
+      if (idx !== cIdx && other?.parentIdx === cIdx) candidates.push(idx);
+    });
+    const cArea = ringArea(c.shape);
+    const cPts = c.shape.getPoints(96);
+    for (const idx of candidates) {
+      const other = State.contours[idx];
+      if (!other?.shape || other._deleted || other.deleted) continue;
+      if (!Utils.isVisibleContour(other)) continue;
+      if (enclosesInterior(c.shape, other.shape) || enclosesInterior(other.shape, c.shape)) continue;
+      const otherArea = ringArea(other.shape);
+      if (Math.abs(cArea - otherArea) > Math.max(cArea, otherArea, 1e-9) * 1e-3) continue;
+      if (maxRingDistanceApp(cPts, other.shape.getPoints(96)) > 0.01) continue;
+      return idx;
+    }
+    return -1;
+  }
+
   /* ── realHoleDescendants ──────────────────────────────
      Un hijo directo con la misma área que su padre no encierra una región
      interior: es la misma frontera vista desde el otro lado (GEOMETRY_
@@ -7751,8 +7828,14 @@ const PanelUI = (() => {
     }
     items.forEach(item => {
       const pickShape = item.pickShape || item.compositeShape || item.c.shape;
-      addArea(pickShape, absDepth + 0.16, item.cIdx, 'top');
-      addArea(pickShape, -0.16, item.cIdx, 'bottom');
+      // 0.05mm alcanza para separar del plano real y evitar z-fighting en
+      // el picking; con 0.16mm el relleno de resaltado (misma malla, ver
+      // refreshContourVisuals) quedaba visiblemente despegado de la cara,
+      // como una sombra flotando sobre la pieza. Bajarlo más (probado a
+      // 0.02mm) rompe el picking de cara 3D junto a un borde después de
+      // UNDO/REDO — ver test3DFaceUndoRedo en geometry-regression.js.
+      addArea(pickShape, absDepth + 0.05, item.cIdx, 'top');
+      addArea(pickShape, -0.05, item.cIdx, 'bottom');
     });
   }
 
@@ -7891,6 +7974,7 @@ const PanelUI = (() => {
           _voidKind: sc.voidKind || null,
           _voidArea: Number(sc.voidArea) || 0,
           _syntheticVoid: !!sc.syntheticVoid,
+          _itemInternalHole: !!sc._itemInternalHole,
           _sourceContourIdx: Number.isInteger(sc.sourceContourIdx) ? sc.sourceContourIdx : null,
           _panelHidden: !!sc.panelHidden,
           _deleted: !!sc.deleted,
@@ -7978,6 +8062,7 @@ const PanelUI = (() => {
         _voidKind: sc.voidKind || null,
         _voidArea: Number(sc.voidArea) || 0,
         _syntheticVoid: !!sc.syntheticVoid,
+        _itemInternalHole: !!sc._itemInternalHole,
         _sourceContourIdx: Number.isInteger(sc.sourceContourIdx) ? sc.sourceContourIdx : null,
         _panelHidden: !!sc.panelHidden,
         _deleted: !!sc.deleted,
@@ -9824,7 +9909,24 @@ const PanelUI = (() => {
     if (!Utils.isVisibleContour(ct)) return;
 
     const capFace = hit.is3D ? faceFromHit(hit, ct) : 'top';
+    const wasSelectedBefore = State.selectedIdxs.has(cIdx);
     PanelUI.selectOne(cIdx, isCtrl, undefined, capFace);
+
+    /* Frontera coincidente (GEOMETRY_PIPELINE §13, ver findSameSizeTwin):
+       un click 2D no puede distinguir entre dos contornos que ocupan
+       exactamente el mismo lugar físico -- pickBest desempata por orden de
+       recorrido de la escena, así que siempre resuelve al mismo de los dos.
+       Si el click deseleccionaba ese contorno (Ctrl+click dentro de una
+       selección múltiple, ej. tras "Seleccionar todo"), el gemelo se queda
+       seleccionado y resaltado en el mismo sitio -- para el usuario se ve
+       como si el click "no hizo nada". Deselecciona el gemelo también. */
+    if (!hit.is3D && isCtrl && wasSelectedBefore && !State.selectedIdxs.has(cIdx)) {
+      const twinIdx = findSameSizeTwin(ct, cIdx);
+      if (twinIdx !== -1 && State.selectedIdxs.has(twinIdx)) {
+        PanelUI.selectOne(twinIdx, true, undefined, capFace);
+      }
+    }
+
     PanelUI.refreshContourVisuals();
     PanelUI.renderList();
     PanelUI.updateModeBadge();
@@ -10045,7 +10147,7 @@ const PanelUI = (() => {
     const directHolesOf = shapeData.map((_, i) => directHoleShapes(shapeData, i));
     shapeData.forEach(({
       shape,offX,offY,depth,parentIdx,layer,color,elementId,
-      isVoid,voidKind,voidArea,syntheticVoid
+      isVoid,voidKind,voidArea,syntheticVoid,_itemInternalHole
     },i)=>{
       // color se guarda TAL CUAL viene (puede ser null = "sin color
       // explícito"). No se hornea el default acá — así, si el usuario
@@ -10066,6 +10168,7 @@ const PanelUI = (() => {
         _voidKind: voidKind || null,
         _voidArea: Number(voidArea) || 0,
         _syntheticVoid: !!syntheticVoid,
+        _itemInternalHole: !!_itemInternalHole,
       });
     });
     PanelUI.renderList();PanelUI.refreshContourVisuals();PanelUI.updateModeBadge();
@@ -10435,6 +10538,28 @@ const PanelUI = (() => {
       if (absorbed.has(c)) return;
 
       const cIdx = State.contours.indexOf(c);
+
+      /* El borde de un hueco que resolve() expone como su propia pieza
+         (_itemInternalHole) puede tener un gemelo de igual área y geometría
+         exacta (padre o hijo directo, ninguno hueco real del otro) que
+         representa el mismo lugar físico -- ver findSameSizeTwin. Ambos
+         siguen existiendo como contornos propios (necesario para la
+         "frontera coincidente" de GEOMETRY_PIPELINE §13), pero si LOS DOS
+         se están extruyendo juntos en esta misma acción, sólo uno debe
+         aportar material sólido ahí. Ceder acá NUNCA pierde material: el
+         gemelo, que también está en `selected`, lo aporta en esta misma
+         pasada. Deliberadamente NO se cede cuando el gemelo no está
+         seleccionado (ej. extruir un único contorno a propósito, como hace
+         PanelUI.selectOne) -- ahí ceder dejaría la selección sin ninguna
+         pieza, que es peor que el duplicado que se quiere evitar. */
+      if (c._itemInternalHole) {
+        const twinIdx = findSameSizeTwin(c, cIdx);
+        if (twinIdx !== -1 && selectedSet.has(State.contours[twinIdx])) {
+          coveredByChildren++;
+          return;
+        }
+      }
+
       const color = c.color || extrudeColor;
 
       const compositeShape = WindingUtils.makeShapeCCW(c.shape);
