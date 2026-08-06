@@ -4183,11 +4183,14 @@ const Viewport = (() => {
   // del color base — oscurece por mezcla real de color si es claro, agrega
   // un glow teñido con el propio tono si es oscuro/saturado.
   function _applyHighlight(mesh, mode) {
-    /* Una pieza unida es un solo mesh con muchas sub-caras. Teñirla entera
-       no indica cual esta señalada — al contrario, tapa la diferencia. En
-       ese caso el resaltado lo hace el relleno de la sub-cara y sus lineas
-       de contorno (ver addMergedContourPickAreas y refreshContourVisuals). */
-    if (mesh.userData?._mergedPiece) { _clearHighlight(mesh); return; }
+    /* Toda pieza extruida tiene overlays por sub-cara (ver
+       addMergedContourPickAreas y refreshContourVisuals), tenga uno o
+       varios contornos de origen. Teñir el mesh entero al SELECCIONAR tapa
+       justo la distinción que esos overlays existen para mostrar — cuál
+       cara puntual está elegida, no toda la pieza. El hover sigue tiñendo
+       la pieza completa (no hay hoy una noción de "cara bajo el mouse"
+       separada de "cara seleccionada"). */
+    if (mode === 'select' && mesh.userData?._facePicking) { _clearHighlight(mesh); return; }
     // Guardar color original ANTES de cualquier modificación (solo la primera vez)
     if (mesh.userData._highlightOrigColor == null) {
       mesh.userData._highlightOrigColor = mesh.material.color.getHex();
@@ -7797,9 +7800,10 @@ const PanelUI = (() => {
   ─────────────────────────────────────────────────────────────────── */
   function addMergedContourPickAreas(mesh, items, depth) {
     const absDepth = Math.abs(depth) || 0.1;
-    // Marca que este mesh agrupa varias sub-caras: su resaltado se resuelve
-    // por sub-cara y no tiñendo la pieza entera.
-    mesh.userData._mergedPiece = true;
+    // Marca que este mesh resuelve su resaltado de selección por sub-cara
+    // (ver _applyHighlight) y no tiñendo la pieza entera — vale tanto para
+    // una pieza fusionada de varios contornos como para una de uno solo.
+    mesh.userData._facePicking = true;
     /* Cada sub-cara lleva su propio material en vez de compartir uno: es lo
        que permite teñir SOLO la region señalada dentro de una pieza unida.
        En reposo no escribe color, asi que sigue siendo invisible y solo
@@ -7987,22 +7991,21 @@ const PanelUI = (() => {
           const rebuilt = buildSnapshotPieceGeometry(sourceIdxs, pd, true);
           const compositeShape = rebuilt.rootShapes[0];
           const mergedExtraShapes = rebuilt.extraShapes;
-          if (sourceIdxs.length > 1) {
-            rebuilt.rootShapes.forEach((shape, rootIdx) => {
-              shape._pickCIdx = sourceIdxs[rootIdx];
-            });
-          }
+          // _pickCIdx + addMergedContourPickAreas dan el resaltado por
+          // sub-cara: se aplican siempre, tenga la pieza uno o varios
+          // contornos de origen (ver _applyHighlight/_facePicking).
+          rebuilt.rootShapes.forEach((shape, rootIdx) => {
+            shape._pickCIdx = sourceIdxs[rootIdx];
+          });
           const mesh = GeoModule.extrude(compositeShape, sc.offX, sc.offY, {
             depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg, color: pd.color,
             extraShapes: mergedExtraShapes,
           });
-          if (sourceIdxs.length > 1) {
-            addMergedContourPickAreas(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
-              cIdx: srcIdx,
-              c: { shape: snap.contours[srcIdx].shape },
-              pickShape: rebuilt.rootShapes[shapeIdx],
-            })), pd.depth);
-          }
+          addMergedContourPickAreas(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
+            cIdx: srcIdx,
+            c: { shape: snap.contours[srcIdx].shape },
+            pickShape: rebuilt.rootShapes[shapeIdx],
+          })), pd.depth);
           // Restaurar posición base (encima de la pieza original)
           mesh.position.x = pd.baseX !== undefined ? pd.baseX : mesh.position.x;
           mesh.position.y = pd.baseY !== undefined ? pd.baseY : mesh.position.y;
@@ -8076,22 +8079,21 @@ const PanelUI = (() => {
         const rebuilt = buildSnapshotPieceGeometry(sourceIdxs, pd, false);
         const compositeShape = rebuilt.rootShapes[0];
         const mergedExtraShapes = rebuilt.extraShapes;
-        if (sourceIdxs.length > 1) {
-          rebuilt.rootShapes.forEach((shape, rootIdx) => {
-            shape._pickCIdx = sourceIdxs[rootIdx];
-          });
-        }
+        // _pickCIdx + addMergedContourPickAreas dan el resaltado por
+        // sub-cara: se aplican siempre, tenga la pieza uno o varios
+        // contornos de origen (ver _applyHighlight/_facePicking).
+        rebuilt.rootShapes.forEach((shape, rootIdx) => {
+          shape._pickCIdx = sourceIdxs[rootIdx];
+        });
         const mesh = GeoModule.extrude(compositeShape, sc.offX, sc.offY, {
           depth: pd.depth, bevel: pd.bevel, bevelSeg: pd.bevelSeg, color: pd.color,
           extraShapes: mergedExtraShapes,
         });
-        if (sourceIdxs.length > 1) {
-          addMergedContourPickAreas(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
-            cIdx: srcIdx,
-            c: { shape: snap.contours[srcIdx].shape },
-            pickShape: rebuilt.rootShapes[shapeIdx],
-          })), pd.depth);
-        }
+        addMergedContourPickAreas(mesh, sourceIdxs.map((srcIdx, shapeIdx) => ({
+          cIdx: srcIdx,
+          c: { shape: snap.contours[srcIdx].shape },
+          pickShape: rebuilt.rootShapes[shapeIdx],
+        })), pd.depth);
         Viewport.add3D(mesh);
         const piece = GeoModule.makePiece({
           mesh, name: pd.name, color: pd.color,
@@ -10614,7 +10616,14 @@ const PanelUI = (() => {
         return;
       }
 
+      // Etiquetar la forma con _pickCIdx ANTES de extruir, igual que el
+      // camino fusionado: addMergedContourPickAreas() da el resaltado por
+      // sub-cara a toda pieza, tenga uno o varios contornos de origen (ver
+      // DECISIONS.md — antes solo se llamaba con más de un contorno, y una
+      // pieza sola caía en el resaltado de mesh completo).
+      compositeShape._pickCIdx = cIdx;
       const mesh = GeoModule.extrude(compositeShape, c.offX, c.offY, {depth: (c.depthOverride ?? extDepth), bevel, bevelSeg:bseg, color, extraShapes});
+      addMergedContourPickAreas(mesh, [{ c, cIdx, compositeShape }], (c.depthOverride ?? extDepth));
       Viewport.add3D(mesh);
       // Un contorno renombrado antes de extruir conserva su nombre: la
       // pieza es el mismo elemento de la lista, no uno nuevo.
