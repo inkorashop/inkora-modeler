@@ -12,7 +12,7 @@
 </script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="inkora-version" content="1.0.19">
+<meta name="inkora-version" content="1.0.20">
 <title>INKORA · Keychain 3D Modeler</title>
 <script src="vendor/three.min.js"></script>
 <script src="vendor/BufferGeometryUtils.js"></script>
@@ -867,7 +867,7 @@ html.light{
 <div id="app">
 
   <header id="header">
-    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.19</span></div>
+    <div class="logo">INKORA <span>/ 3D</span><span class="logo-version" id="app-version-label">v1.0.20</span></div>
     <div class="sep"></div>
     <!-- Menú Archivo: nuevo, abrir, recientes, guardar, guardar como e
          importar. Exportar y abrir en laminador quedan afuera, sueltos en
@@ -1142,7 +1142,7 @@ html.light{
 <script>
 'use strict';
 
-const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.19').trim();
+const APP_VERSION = (window.inkoraAppInfo?.version || '1.0.20').trim();
 
 (function syncAppVersion(){
   const label = document.getElementById('app-version-label');
@@ -3403,20 +3403,31 @@ const SVGVisibleGeometry = (() => {
     const flatPaths = out.map(entry => toClipperPath(entry.shape.getPoints(128)));
 
     voidPaths.forEach((voidPath, voidIdx) => {
-      let matchIdx = -1;
+      // Puede haber más de un ítem visible ocupando exactamente la misma
+      // región que el vacío: la propia región "hueco" que sale del cálculo
+      // de visibilidad del fondo (el borde del agujero, expuesto como su
+      // propia pieza -- ver resolve()) Y el objeto real que forma ese hueco
+      // en el análisis de material (mismo color/estilo que el fondo,
+      // contenido casi al 100%, el mismo patrón que un compuesto DXF real
+      // como una dona). Sin esto, sólo la primera coincidencia se marcaba
+      // vacía y la segunda sobrevivía como material seleccionable/extruible
+      // independiente en el mismo lugar exacto que el agujero.
+      const matches = [];
       for (let i = 0; i < flatPaths.length; i++) {
         if (!flatPaths[i]) continue;
-        if (sameRegion(flatPaths[i], voidPath, lib)) {
-          matchIdx = i;
-          break;
-        }
+        if (sameRegion(flatPaths[i], voidPath, lib)) matches.push(i);
       }
 
       const area = pathArea(voidPath, lib);
-      if (matchIdx !== -1) {
-        out[matchIdx].isVoid = true;
-        out[matchIdx].voidKind = voidKind;
-        out[matchIdx].voidArea = area;
+      if (matches.length) {
+        const [keepIdx, ...dupeIdxs] = matches;
+        out[keepIdx].isVoid = true;
+        out[keepIdx].voidKind = voidKind;
+        out[keepIdx].voidArea = area;
+        dupeIdxs.forEach(idx => {
+          out[idx] = null;
+          flatPaths[idx] = null;
+        });
         return;
       }
 
@@ -3437,7 +3448,8 @@ const SVGVisibleGeometry = (() => {
         syntheticVoid: true,
       });
     });
-    return out;
+
+    return out.filter(Boolean);
   }
 
   function pointsBounds(points) {

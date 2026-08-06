@@ -3,7 +3,81 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
-## 2026-08-05 (seguimiento 2) — DXF: CorelDRAW duplica relleno+contorno como dos entidades, rompía la "D" de Cataratas
+## 2026-08-05 (seguimiento 3) — Vacío duplicado en `applyMaterialVoids` (Camem) + dos intentos descartados de arreglar el bloqueo de click
+
+### Síntoma (arreglado)
+
+En `Camem reverso.dxf`, un círculo (agujero de argolla) del mismo color que
+el fondo, sin nada más encima, se extruía **sólido** en vez de como hueco.
+El resaltado de selección volvía a verse con el offset visual ya conocido
+(ver seguimiento del 2026-08-05, "offset del resaltado") — pero esta vez la
+causa no era el offset en sí: era geometría sólida duplicada y superpuesta
+en el mismo lugar, el mismo síntoma de fondo que ya se había visto con la
+"A" y la "D", con un tercer mecanismo distinto.
+
+### Causa raíz
+
+`resolve()` calcula la región visible de cada item restándole todo lo
+pintado encima (`ctDifference`). Cuando esa resta deja al item con un hueco
+interior (algo lo cubre por completo en esa zona), el borde de ese hueco se
+emite como su **propia pieza positiva** — necesario para que
+`applyMaterialVoids()` pueda evaluarlo como candidato a vacío (ver
+GEOMETRY_PIPELINE §12). Cuando el círculo y el fondo comparten color y
+`buildDXFMaterialItems()` los agrupa como compuesto (mismo patrón que una
+dona real, ~99.9% de contención), el análisis de material concluye
+correctamente "acá no hay material" — pero `applyMaterialVoids()` sólo
+marcaba como vacío la **primera** coincidencia geométrica que encontraba
+(`sameRegion`) y dejaba la **segunda** (el círculo, sobreviviente como su
+propio ítem pintado real) intacta como material normal, seleccionable y
+extruible, en el mismo lugar exacto que el vacío.
+
+### Solución
+
+En `applyMaterialVoids()`, en vez de cortar en la primera coincidencia
+(`break`), se juntan **todas** las coincidencias geométricas de cada vacío;
+la primera se marca vacía como antes, y las demás se descartan del array de
+salida (antes sobrevivían como duplicados). Cambio acotado a esa única
+función, sin tocar `resolve()` ni la jerarquía de contornos. Validado con
+`npm run test:geometry` completo, con un caso sintético mínimo (fondo +
+cuadrado interior del mismo color) y con el archivo real del usuario —
+captura de pantalla confirma el círculo como hueco real (se ve el fondo a
+través).
+
+### Dos intentos descartados para el bloqueo de click en piezas 2D adyacentes
+
+El mismo archivo reveló un segundo síntoma: extruir sólo una capa de color
+dejaba una pieza 3D fantasma tapando el hueco de una letra de otra capa,
+bloqueando el click sobre esa letra todavía sin extruir. Se intentaron dos
+soluciones, ambas descartadas — quedan documentadas para no reintentarlas
+sin evidencia nueva:
+
+**Intento 1 — eliminar el borde-de-hueco de `resolve()` cuando no matchea
+un vacío real.** Rompía `coincidentBoundaryPairs` del Tucán: el mismo
+mecanismo que genera el fantasma en Camem es el que sostiene la "frontera
+coincidente" documentada en GEOMETRY_PIPELINE §13 (fondo blanco + parche
+naranja del Tucán, el mismo patrón que la "A"). Ese contorno tiene que
+seguir existiendo — no es basura, es la mitad de un patrón de diseño válido.
+
+**Intento 2 — dejarlo existir, pero que ceda el material en el momento de
+extruir si tiene un "gemelo" de igual área y geometría exacta
+(`findSameSizeTwin`).** Más seguro (no toca `resolve()`, el Tucán conservó
+sus 4 pares intactos), pero rompió `testBeveled3MFFlow`: ese test selecciona
+**un solo contorno** del Tucán a propósito, y resultó ser estructuralmente
+idéntico al patrón del fantasma de Camem (mismo esquema, gemelo de color
+distinto, gemelo no seleccionado) — la regla lo descartaba también, dejando
+la extrusión en cero piezas.
+
+Ese segundo intento es la prueba concluyente de que **geometría y color no
+alcanzan** para distinguir los dos casos: son estructuralmente el mismo
+patrón. Lo que los distingue es la intención del usuario — clickear un
+contorno a propósito (debe extruir) contra "seleccionar todo lo de un
+color" arrastrando el fantasma sin querer (no debería extruir) — algo que
+no se puede inferir sólo de la forma o el color. Una solución real
+necesitaría tocar el mecanismo de selección (por ejemplo, que un
+"seleccionar todos"/"seleccionar por color" masivo excluya estos bordes de
+hueco, sin afectar una selección individual deliberada como
+`PanelUI.selectOne`) — no investigado todavía. **No reintentar el filtro a
+nivel de geometría o de extrusión sin ese componente de intención.**
 
 ### Síntoma
 
