@@ -29,6 +29,11 @@ const svgText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Tucan.svg'), 'ut
 // real y "seleccionar todo + extruir" sobre todo el modelo.
 const layeredDxfText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Cataratas.dxf'), 'latin1');
 const layeredSvgText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Cataratas.svg'), 'utf8');
+// Diseño real del usuario con fronteras coincidentes (fondo + letra encima):
+// ejercita el fantasma _itemInternalHole y su gemelo de igual tamaño en el
+// flujo de click "uno a la vez" (ver DECISIONS.md, bloqueo de click en
+// piezas 2D adyacentes al hueco de una letra).
+const camemDxfText = fs.readFileSync(path.join(repoRoot, 'Modelos', 'Camem.dxf'), 'latin1');
 
 async function waitForGeometryRuntime(win) {
   const deadline = Date.now() + 30000;
@@ -48,6 +53,7 @@ async function collectMetrics(win) {
     const svgText = ${JSON.stringify(svgText)};
     const layeredDxfText = ${JSON.stringify(layeredDxfText)};
     const layeredSvgText = ${JSON.stringify(layeredSvgText)};
+    const camemDxfText = ${JSON.stringify(camemDxfText)};
 
     function polygonArea(points) {
       let area = 0;
@@ -419,6 +425,52 @@ async function collectMetrics(win) {
         clientY: rect.top + (1 - projected.y) * rect.height / 2,
       }));
       return [...State.selectedIdxs];
+    }
+
+    // Un punto interior garantizado del shape (con sus holes), vía el mismo
+    // triangulador que usa ShapeGeometry/ExtrudeGeometry: el centroide de
+    // cualquier triángulo de una triangulación válida cae siempre adentro,
+    // a diferencia del centroide del polígono completo (puede caer afuera
+    // en una forma cóncava, ej. una letra).
+    function interiorPoint(shape) {
+      const outerPts = shape.getPoints(64);
+      const holePts = (shape.holes || []).map(h => h.getPoints(64));
+      const tris = THREE.ShapeUtils.triangulateShape(outerPts, holePts);
+      if (!tris.length) return null;
+      const flat = outerPts.concat(...holePts);
+      const [ia, ib, ic] = tris[0];
+      const a = flat[ia], b = flat[ib], c = flat[ic];
+      return { x: (a.x + b.x + c.x) / 3, y: (a.y + b.y + c.y) / 3 };
+    }
+
+    // Busca, entre los contornos 2D todavia sin extruir, un par que ocupe
+    // exactamente el mismo lugar fisico -- el borde de hueco que resolve()
+    // expone como su propia pieza (_itemInternalHole, ver GeoModule.makeFlat)
+    // y el contorno real que ocupa ese lugar (findSameSizeTwin en PanelUI).
+    // Generico: no asume indices fijos de ningun fixture en particular.
+    function findGhostRealPair(contours) {
+      const tol = 0.0011;
+      for (let i = 0; i < contours.length; i++) {
+        const a = contours[i];
+        if (!a?.shape || a.extruded || !Utils.isVisibleContour(a)) continue;
+        for (let j = i + 1; j < contours.length; j++) {
+          const b = contours[j];
+          if (!b?.shape || b.extruded || !Utils.isVisibleContour(b)) continue;
+          if (!!a._itemInternalHole === !!b._itemInternalHole) continue;
+          const boundsA = shapeBounds(a.shape);
+          const boundsB = shapeBounds(b.shape);
+          const coincide =
+            Math.abs(boundsA.minX - boundsB.minX) <= tol &&
+            Math.abs(boundsA.maxX - boundsB.maxX) <= tol &&
+            Math.abs(boundsA.minY - boundsB.minY) <= tol &&
+            Math.abs(boundsA.maxY - boundsB.maxY) <= tol;
+          if (!coincide) continue;
+          return a._itemInternalHole
+            ? { ghostIdx: i, realIdx: j }
+            : { ghostIdx: j, realIdx: i };
+        }
+      }
+      return null;
     }
 
     function clickObjectTriangleCenter(object) {
@@ -800,6 +852,48 @@ async function collectMetrics(win) {
         before,
         immediate,
         settled,
+      };
+    }
+
+    /* Bloqueo de click en piezas 2D adyacentes al hueco de una letra (ver
+       DECISIONS.md, 2026-08-05 seguimiento 4, punto 2: "sigue sin resolver
+       ... clickear esa otra capa"). Un click sobre un contorno real ("el
+       hueco de una letra", ej. Camem) no puede resolver al fantasma
+       _itemInternalHole que ocupa exactamente el mismo lugar, aunque el
+       fantasma no esté (todavía) en la misma acción de extrusión que su
+       gemelo -- ese es justo el caso que el desempate por selección
+       compartida (ver btn-extrude, findSameSizeTwin) no cubre, porque ahí
+       no hay ninguna extrusión en curso todavía. */
+    async function testAdjacentGhostPicking() {
+      await importThroughFileInput(camemDxfText, 'camem-picking.dxf');
+      await wait(300);
+
+      const pair = findGhostRealPair(State.contours);
+      if (!pair) throw new Error('Camem: no se encontró un par fantasma/gemelo para probar.');
+      const { ghostIdx, realIdx } = pair;
+      const realContour = State.contours[realIdx];
+      // Mismo criterio que el handler de btn-extrude: color propio del
+      // contorno o, si no tiene, el gris por defecto de extrusión.
+      const designColor = realContour.color || '#c8c8d0';
+      const point = interiorPoint(realContour.shape);
+      if (!point) throw new Error('Camem: no se pudo triangular el contorno real para hallar un punto interior.');
+
+      PanelUI.clearAllSelection();
+      const pickBeforeExtrude = clickContourPoint(realContour, point);
+
+      document.getElementById('ex-depth').value = '2';
+      document.getElementById('ex-bevel').value = '0';
+      document.getElementById('btn-extrude').click();
+
+      return {
+        ghostIdx,
+        realIdx,
+        pickBeforeExtrude,
+        designColor,
+        realExtruded: realContour.extruded,
+        realPieceColor: realContour.piece ? realContour.piece.color : null,
+        ghostUntouched: !State.contours[ghostIdx].extruded,
+        piecesCreated: State.pieces.length,
       };
     }
 
@@ -1509,6 +1603,7 @@ async function collectMetrics(win) {
       additionalHistoryOperations: await testAdditionalHistoryOperations(),
       selectionSnapshot: await testSelectionSnapshot(),
       cameraImport: await testCameraImport(),
+      adjacentGhostPicking: await testAdjacentGhostPicking(),
     };
     return metrics;
   })()`, true);
@@ -2058,6 +2153,20 @@ function validate(metrics) {
     failures.push(
       `importar modifica la cámara (inmediato ${metrics.cameraImport.immediateDelta}, final ${metrics.cameraImport.settledDelta})`
     );
+  }
+  const ghostPick = metrics.adjacentGhostPicking;
+  if (ghostPick.pickBeforeExtrude.length !== 1 || ghostPick.pickBeforeExtrude[0] !== ghostPick.realIdx) {
+    failures.push(
+      `Camem: clickear el contorno real (idx ${ghostPick.realIdx}) resuelve a ${JSON.stringify(ghostPick.pickBeforeExtrude)} en vez de al contorno real -- el fantasma de frontera coincidente (idx ${ghostPick.ghostIdx}) le gana el click`
+    );
+  }
+  if (!ghostPick.realExtruded || ghostPick.piecesCreated !== 1 || ghostPick.realPieceColor !== ghostPick.designColor) {
+    failures.push(
+      `Camem: extruir el contorno real (idx ${ghostPick.realIdx}) no produjo la pieza esperada (color ${ghostPick.realPieceColor} contra ${ghostPick.designColor} esperado)`
+    );
+  }
+  if (!ghostPick.ghostUntouched) {
+    failures.push(`Camem: extruir el contorno real también extruyó su fantasma (idx ${ghostPick.ghostIdx})`);
   }
   if (failures.length) throw new Error(failures.join('\n'));
 }

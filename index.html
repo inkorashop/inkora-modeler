@@ -4064,7 +4064,22 @@ const Viewport = (() => {
     const hits2D=rc.intersectObjects(all2D);
     if (!hits2D.length) return null;
 
-    const withArea=hits2D.map(h=>{
+    /* El borde de un hueco que resolve() expone como su propia pieza
+       (_itemInternalHole, ver SVGVisibleGeometry/GeoModule.makeFlat) puede
+       ocupar exactamente el mismo lugar que un contorno real (findSameSizeTwin,
+       en PanelUI) — mismo tamaño, mismo click. Sin desempate, "área de
+       bounding-box ascendente" es una moneda determinística entre los dos:
+       siempre gana el mismo, sin relación con qué quiso tocar el usuario. Si
+       ese fantasma gana y se extruye, crea una pieza fantasma en el lugar del
+       contorno real y ese contorno real queda inalcanzable por click de ahí
+       en más (un hit 3D siempre le gana al fallback 2D). Preferir cualquier
+       candidato real sobre uno fantasma resuelve la ambigüedad sin dejar nada
+       inalcanzable: si el fantasma es el único candidato en ese punto, sigue
+       siendo clickeable igual que antes. */
+    const realHits2D = hits2D.filter(h => !h.object.userData?._itemInternalHole);
+    const candidates2D = realHits2D.length ? realHits2D : hits2D;
+
+    const withArea=candidates2D.map(h=>{
       const box=new THREE.Box3().setFromObject(h.object);
       const sz=box.getSize(new THREE.Vector3());
       // Los flatMeshes están rotados -90° en X, así que la "planta" es X×Z
@@ -4586,7 +4601,7 @@ const GeoModule = (() => {
   // se hubieran resaltado. Se clona el shape para no mutar el original
   // (el mismo objeto `shape` se reusa para jerarquía y extrusión, que no
   // deben ver estos holes "solo visuales").
-  function makeFlat(shape,offX,offY,color='#555566',holeShapes){
+  function makeFlat(shape,offX,offY,color='#555566',holeShapes,isInternalHole=false){
     let displayShape = shape;
     if (holeShapes && holeShapes.length) {
       displayShape = shape.clone();
@@ -4607,6 +4622,11 @@ const GeoModule = (() => {
     mesh.renderOrder = idx + 1;
     mesh.rotation.x=-Math.PI/2;
     mesh.position.set(-offX,0.05,offY);
+    // Ver Viewport.pickBest(): un contorno "borde de hueco" (ver
+    // SVGVisibleGeometry.resolve, _itemInternalHole) puede compartir
+    // exactamente el mismo lugar que un contorno real -- el picking 2D
+    // desempata a favor del real cuando los dos compiten por el mismo click.
+    mesh.userData._itemInternalHole = !!isInternalHole;
     return mesh;
   }
 
@@ -8046,7 +8066,8 @@ const PanelUI = (() => {
         sc.offX,
         sc.offY,
         flatColor,
-        directHoleShapes(snap.contours, i)
+        directHoleShapes(snap.contours, i),
+        sc._itemInternalHole
       );
       const outlineMesh = GeoModule.makeOutline(sc.shape, sc.offX, sc.offY, flatColor);
       Viewport.add2D(flatMesh);
@@ -10157,7 +10178,7 @@ const PanelUI = (() => {
       // vuelve a resolverlo con Utils.defaultContourColor() y sigue
       // viéndose bien en el tema nuevo.
       const dxfColor = Utils.contourDisplayColor(color);
-      const flatMesh=GeoModule.makeFlat(shape,offX,offY,dxfColor,directHolesOf[i]);
+      const flatMesh=GeoModule.makeFlat(shape,offX,offY,dxfColor,directHolesOf[i],_itemInternalHole);
       const outlineMesh=GeoModule.makeOutline(shape,offX,offY,dxfColor);
       Viewport.add2D(flatMesh);Viewport.add2D(outlineMesh);
       // depth y parentIdx vienen del parser: permiten saber si este contorno
