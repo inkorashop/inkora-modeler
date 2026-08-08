@@ -719,6 +719,65 @@ async function collectMetrics(win) {
       };
     }
 
+    /* THREE.Raycaster no comprueba '.visible' (ni el propio objeto ni
+       sus ancestros) antes de raycastear -- confirmado leyendo el
+       recorrido interno de vendor/three.min.js. Sin un filtro propio,
+       una pieza oculta con "Ocultar" (tecla 'h') seguia siendo un
+       objetivo valido de click, pudiendo seleccionarse "a traves" de
+       ella. Extruye una pieza, confirma que su propio punto interior
+       la selecciona, la oculta con el mismo atajo real que usa un
+       usuario, y exige que ese mismo punto deje de resolver a ella.
+       Después la vuelve a mostrar y confirma que vuelve a ser
+       seleccionable -- el filtro no debe romper el camino normal. */
+    async function testHiddenPieceNotPickable() {
+      await importThroughFileInput(dxfText, 'tucan-hidden-pick.dxf');
+      const idx = State.contours.findIndex(contour =>
+        Utils.isVisibleContour(contour) && !contour.extruded && contour.depth % 2 === 0
+      );
+      if (idx === -1) throw new Error('No se encontró un contorno sólido para probar picking de piezas ocultas.');
+
+      PanelUI.clearAllSelection();
+      PanelUI.selectOne(idx, false, undefined, 'top');
+      State.extrudeMode = 'separate';
+      document.getElementById('ex-depth').value = '3';
+      document.getElementById('ex-bevel').value = '0';
+      PanelUI.updateButtons();
+      document.getElementById('btn-extrude').click();
+
+      const contour = State.contours[idx];
+      const point = interiorPoint(contour.shape);
+      if (!point || !contour.piece) {
+        throw new Error('No se pudo extruir/triangular el contorno de prueba de picking oculto.');
+      }
+
+      PanelUI.clearAllSelection();
+      const pickedVisible = clickPieceFacePoint(contour, point, 'top');
+
+      PanelUI.clearAllSelection();
+      PanelUI.selectOne(idx, false, undefined, 'top');
+      document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'h' }));
+      const hidden = contour.piece.mesh.visible === false;
+      PanelUI.clearAllSelection();
+      const pickedWhileHidden = clickPieceFacePoint(contour, point, 'top');
+      const panelRowSurvives = Utils.isPanelContour(contour, idx);
+
+      PanelUI.selectOne(idx, false, undefined, 'top');
+      document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'h' }));
+      const shownAgain = contour.piece.mesh.visible !== false;
+      PanelUI.clearAllSelection();
+      const pickedAfterUnhide = clickPieceFacePoint(contour, point, 'top');
+
+      return {
+        idx,
+        pickedVisible,
+        hidden,
+        pickedWhileHidden,
+        panelRowSurvives,
+        shownAgain,
+        pickedAfterUnhide,
+      };
+    }
+
     async function testAdditionalHistoryOperations() {
       await importThroughFileInput(dxfText, 'tucan-other-history.dxf');
       const nearBoundary = findNearBoundaryFacePick();
@@ -1600,6 +1659,7 @@ async function collectMetrics(win) {
       threeDFaceUndoRedoSeparate: await test3DFaceUndoRedo('separate'),
       threeDFaceUndoRedoMerged: await test3DFaceUndoRedo('merged'),
       visibilityUndoRedo: await testVisibilityUndoRedo(),
+      hiddenPieceNotPickable: await testHiddenPieceNotPickable(),
       additionalHistoryOperations: await testAdditionalHistoryOperations(),
       selectionSnapshot: await testSelectionSnapshot(),
       cameraImport: await testCameraImport(),
@@ -2118,6 +2178,26 @@ function validate(metrics) {
       !visibility.allVisibleAfterUndo || !visibility.isolatedAfterRedo ||
       !visibility.coherent) {
     failures.push('ocultar/aislar no conserva estado y selección durante UNDO/REDO');
+  }
+  const hiddenPick = metrics.hiddenPieceNotPickable;
+  if (hiddenPick.pickedVisible.length !== 1 || hiddenPick.pickedVisible[0] !== hiddenPick.idx) {
+    failures.push('click en el punto interior de una pieza visible no la selecciona');
+  }
+  if (!hiddenPick.hidden) {
+    failures.push('el atajo de ocultar no marca la pieza como no visible');
+  }
+  if (hiddenPick.pickedWhileHidden.includes(hiddenPick.idx)) {
+    // El click puede caer en una capa 2D todavía sin extruir que estaba
+    // debajo (diseño por capas real) — eso es correcto. Lo que nunca
+    // puede pasar es que resuelva a la propia pieza que se ocultó.
+    failures.push('el picking selecciona una pieza oculta (Raycaster no respeta .visible)');
+  }
+  if (!hiddenPick.panelRowSurvives) {
+    failures.push('ocultar una pieza le quita su fila del panel (queda imposible de volver a mostrar)');
+  }
+  if (!hiddenPick.shownAgain ||
+      hiddenPick.pickedAfterUnhide.length !== 1 || hiddenPick.pickedAfterUnhide[0] !== hiddenPick.idx) {
+    failures.push('volver a mostrar una pieza oculta no restaura su picking');
   }
   const additional = metrics.additionalHistoryOperations;
   if (!additional.duplicateAfterAction ||

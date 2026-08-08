@@ -1234,6 +1234,22 @@ const Utils = (() => {
     if (c.extruded && c.piece && c.piece.contourIdx !== idx) return false;
     return true;
   }
+  /* ── isReachableByBulkSelection ─────────────────────────
+     Para mecanismos de selección espacial/masiva (Seleccionar todo,
+     marquee, click en viewport): además de ser un contorno visible,
+     su pieza 3D (si la tiene) no debe estar oculta con "Ocultar"/"Aislar"
+     (piece.mesh.visible === false). Deliberadamente NO se mete dentro
+     de isVisibleContour(): esa función también decide si la fila
+     aparece en el panel lateral (ver isPanelContour → renderList), y
+     una pieza oculta tiene que seguir teniendo fila ahí — es el único
+     camino para volver a mostrarla. Antes este chequeo solo existía,
+     copiado inline, en selectModelExtremeFace() (ver DECISIONS.md).
+  ─────────────────────────────────────────────────────────────── */
+  function isReachableByBulkSelection(c) {
+    if (!isVisibleContour(c)) return false;
+    if (c.piece && c.piece.mesh && c.piece.mesh.visible === false) return false;
+    return true;
+  }
   // Color de contorno cuando no hay uno explícito (DXF/SVG sin color de
   // capa, piezas duplicadas, etc.). Antes era un lila clarito fijo
   // (#dedcff) — se veía bien sobre el viewport oscuro pero se volvía
@@ -1306,7 +1322,7 @@ const Utils = (() => {
     }
     return inside;
   }
-  return { toast, palette, isVisibleContour, isPanelContour, parseDecimal, clamp, pointInPolygon, defaultContourColor, selectedContourColor, resolveLegacyColor, contourDisplayColor, contrastingLineColor, relativeLuminance, accentColor };
+  return { toast, palette, isVisibleContour, isPanelContour, isReachableByBulkSelection, parseDecimal, clamp, pointInPolygon, defaultContourColor, selectedContourColor, resolveLegacyColor, contourDisplayColor, contrastingLineColor, relativeLuminance, accentColor };
 })();
 
 
@@ -4043,18 +4059,35 @@ const Viewport = (() => {
      Ordenando por área, la letra encima del fondo siempre gana porque
      su bounding box es más chico que el del contorno exterior.
      ────────────────────────────────────────────────────────────────────── */
+  /* ── isEffectivelyVisible ───────────────────────────────
+     Three.js Raycaster no comprueba `.visible` (ni el propio ni el de
+     sus ancestros) antes de raycastear un objeto — solo `layers`. Sin
+     este filtro, una pieza oculta con "Ocultar"/"Aislar" seguía siendo
+     un objetivo válido de click/hover, pudiendo "ganarle" a la pieza
+     visible real en el mismo punto. Recorre la cadena de padres hasta
+     la raíz; replica exactamente lo que ya decide el renderer.
+  ─────────────────────────────────────────────────────────────── */
+  function isEffectivelyVisible(obj) {
+    let o = obj;
+    while (o) {
+      if (o.visible === false) return false;
+      o = o.parent;
+    }
+    return true;
+  }
   function pickBest(rc) {
     const pickAreaTargets=[];
     const pickLineTargets=[];
     group3D.traverse(o=>{
       if(o.userData?._pickContourIdx == null)return;
+      if(!isEffectivelyVisible(o))return;
       if(o.isMesh)pickAreaTargets.push(o);
       else if(o.isLine)pickLineTargets.push(o);
     });
     const hitsPickAreas=rc.intersectObjects(pickAreaTargets, false);
     const hitsPickLines=rc.intersectObjects(pickLineTargets, false);
     const all3D=[];
-    group3D.traverse(o=>{if(o.isMesh && o.userData?._pickContourIdx == null)all3D.push(o);});
+    group3D.traverse(o=>{if(o.isMesh && o.userData?._pickContourIdx == null && isEffectivelyVisible(o))all3D.push(o);});
     const hits3D=rc.intersectObjects(all3D);
 
     function sortPickTargets(hits) {
@@ -4096,7 +4129,7 @@ const Viewport = (() => {
 
     // 2D: recolectar todos los hits y ordenar por área ascendente
     const all2D=[];
-    group2D.traverse(o=>{if(o.isMesh)all2D.push(o);});
+    group2D.traverse(o=>{if(o.isMesh && isEffectivelyVisible(o))all2D.push(o);});
     const hits2D=rc.intersectObjects(all2D);
     if (!hits2D.length) return null;
 
@@ -7494,7 +7527,7 @@ const PanelUI = (() => {
   }
   function selectAll(){
     State.contours.forEach((c,i)=>{
-      if(!Utils.isPanelContour(c, i))return;
+      if(!Utils.isPanelContour(c, i) || !Utils.isReachableByBulkSelection(c))return;
       if(!c.extruded)c.sel2D=true;
       State.selectedIdxs.add(i);
       State.selectedFaces.set(i, safeSelectionFace(c));
@@ -10301,7 +10334,7 @@ const PanelUI = (() => {
       // y verificar que esté 100% dentro del rectángulo de selección.
       const toSelect = [];
       State.contours.forEach((c, idx) => {
-        if (!Utils.isVisibleContour(c)) return;
+        if (!Utils.isReachableByBulkSelection(c)) return;
         const face = viewFaceForContour(c);
         const box = contourScreenBox(c, idx, face);
         if (!box) return;

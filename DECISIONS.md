@@ -3,6 +3,131 @@
 Este archivo documenta decisiones de arquitectura y bugs de raíz corregidos,
 para que no se reintroduzcan por accidente en trabajo futuro (humano o IA).
 
+## 2026-08-08 — Picking no respetaba piezas ocultas (Raycaster no comprueba `.visible`)
+
+**Síntoma:** reportado como "el picking en general funciona un poco mal a veces
+— a veces selecciona la pieza equivocada, a veces no deja seleccionar", no
+limitado a piezas adyacentes.
+
+**Causa raíz confirmada leyendo `vendor/three.min.js`:** el recorrido interno
+que usa `Raycaster.intersectObject(s)` (`$c`, minificado) solo comprueba
+`object.layers.test(...)` antes de invocar `object.raycast(...)` — nunca
+comprueba `.visible`, ni del propio objeto ni de sus ancestros. Ni
+`Viewport.pickBest()`, ni `PanelUI.selectAll()`, ni el marquee filtraban por
+`piece.mesh.visible` en ningún punto; solo `selectModelExtremeFace()`
+(Ctrl+1/Ctrl+2) tenía ese chequeo, copiado inline y aislado ahí. Una pieza
+oculta con "Ocultar" (`h`) o dejada fuera por "Aislar" seguía siendo un
+objetivo válido de click, hover, marquee y "Seleccionar todo" — podía
+seleccionarse "a través" de ella, o el click podía resolver a la oculta en
+vez de a la pieza visible debajo.
+
+**Solución:** `Viewport.isEffectivelyVisible(obj)` (nueva, recorre la cadena
+de padres) filtra las cuatro recolecciones de candidatos de `pickBest()`
+(áreas de sub-cara, líneas, sólidos 3D, contornos 2D). `Utils.isReachableByBulkSelection(c)`
+(nueva) agrega el mismo chequeo de `piece.mesh.visible` a `selectAll()` y al
+marquee. Deliberadamente **no** se metió el chequeo dentro de
+`isVisibleContour()`: esa función también decide si la fila aparece en el
+panel lateral, y una pieza oculta tiene que seguir teniendo fila ahí — es el
+único camino para volver a mostrarla. `isPanelContour`, `renderList()` y
+`_selectOne()` no se tocaron.
+
+**Verificación:** nuevo test `testHiddenPieceNotPickable` en
+`geometry-regression.js` (mismo patrón que `testAdjacentGhostPicking`: click
+DOM real vía `clickPieceFacePoint`, no llamada directa) — extruye una pieza,
+confirma que su punto interior la selecciona, la oculta con el atajo real
+(`h`), confirma que ese mismo punto ya no resuelve a ella (puede resolver a
+una capa 2D real debajo, eso es correcto), confirma que la fila sigue en el
+panel, y que volver a mostrarla restaura el picking. `npm run test:geometry`
+completo en verde.
+
+**Nota de flakiness no relacionada:** una corrida aislada mostró
+`test3DFaceUndoRedo('merged')` fallando ("el picking de cara 3D junto al
+borde cambia durante UNDO"); una segunda corrida con el mismo código pasó
+limpio. Es una intermitencia preexistente del test (la posición de cámara
+capturada por `cameraImport` también varía levemente entre corridas), no una
+regresión de este cambio — no investigada a fondo esta sesión.
+
+## 2026-08-08 — Investigado (y descartado) un intento de arreglar la malla abierta en extrusión separada densa
+
+Contexto: `GEOMETRY_PIPELINE.md` §13 documenta que extruir en modo separado
+el contorno base de `Cataratas.dxf`/`.svg` (que absorbe ~46-60 huecos
+seleccionados) produce una malla no-manifold. Se investigó a fondo con dos
+enfoques; **ninguno de los dos se adoptó** — quedan documentados para no
+reintentarlos sin evidencia nueva.
+
+### Diagnóstico confirmado
+
+La triangulación de la TAPA (no las paredes laterales, que se arman por
+anillo y son robustas) usa earcut vía `THREE.ShapeUtils.triangulateShape(outer, holes)`.
+Con ~46 huecos densos, el heurístico de "puente" de earcut (conecta cada
+hueco al borde por proximidad, no por visibilidad real) puede fallar,
+dejando la tapa con aristas abiertas. Confirmado con datos reales extraídos
+del contorno base de Cataratas (416 puntos exteriores, 46 huecos de hasta
+751 puntos cada uno): cada hueco triangula perfecto en aislamiento: el
+problema es la interacción entre huecos al combinarlos.
+
+### Intento (b) — `regularizeTouchingHole` valida también contra huecos hermanos
+
+Extendido para rechazar un punto de reemplazo si cae dentro de otro hueco
+hermano (mismo `Clipper.PointInPolygon`, sin tolerancia nueva). Corrección
+geométricamente correcta en sí misma (un punto de reemplazo dentro de un
+hueco vecino es una violación real), pero **al combinarse con el earcut
+nativo, cambió qué piezas fallan en vez de reducir el total**: rompió
+`testOBJExport` para `Cataratas.svg` en modo separado, que con el código
+original (sin este cambio) exportaba sin errores.
+
+### Intento (a) — aplanar el shape a un único anillo simple ("keyhole") antes de triangular
+
+Nueva función que conecta cada hueco al contorno (o a un hueco ya
+conectado) por el puente más corto que no cruza ninguna arista existente
+(visibilidad real, no proximidad), duplicando los dos vértices del puente
+(técnica keyhole estándar), y triangula el anillo resultante con
+`triangulateShape(anillo, [])` — el mismo camino sin huecos que earcut ya
+maneja bien.
+
+- **Validado en sintético** (38-40 huecos, hasta 40 en grilla densa): 0
+  aristas malas, área exacta.
+- **Redujo sustancialmente el caso real**: de 62 a 18 aristas abiertas en
+  Cataratas DXF (limpieza de colinealidad en `cleanRing`, ver abajo,
+  aportó la mayor parte de esa mejora). Nunca llegó a 0: quedó un residuo de
+  ~4-18 aristas en el hueco más denso/complejo (300-750 puntos), que
+  parece un límite del ear-clipping básico de earcut para ese caso
+  específico (probado: forzar puentes solo al exterior empeoró a 88;
+  perturbar coordenadas duplicadas en 1e-7mm no cambió nada).
+- **Introdujo la misma regresión que (b)** en `testOBJExport` para
+  `Cataratas.svg` separado (34 aristas abiertas donde antes no había
+  ninguna) — el aplanado por keyhole, aun siendo conceptualmente más
+  robusto que el heurístico de earcut, no es estrictamente superior en
+  todos los casos reales.
+- Complementado con limpieza de colinealidad en `cleanRing()` (perpendicular
+  del punto a la recta vecino-vecino, umbral `1e-4mm` = la grilla canónica
+  de Clipper): reduce significativamente el problema pero no lo cierra.
+
+### Por qué se revirtieron los dos
+
+Un cambio que arregla una pieza y rompe otra que antes funcionaba no es una
+mejora neta — viola el principio de este archivo de no reintroducir un
+síntoma nuevo al perseguir uno viejo. Se revirtió todo el código de ambos
+intentos (`Solid2D.flattenPolygonWithHoles`, el parámetro `siblingHoles` de
+`regularizeTouchingHole`, la limpieza de colinealidad de `cleanRing`),
+dejando el pipeline de triangulación exactamente como estaba. El defecto de
+`GEOMETRY_PIPELINE.md` §13 sigue sin resolver.
+
+### Próximo intento, si se retoma
+
+No perseguir más ajustes sobre el heurístico de earcut vía manipulación de
+puntos de entrada — ya se probaron varias variantes (nativo, keyhole con
+puente más cercano, keyhole con puente solo-al-exterior, con y sin limpieza
+de colinealidad, con y sin perturbación numérica) con resultados mixtos e
+impredecibles. El camino más prometedor no explorado es una triangulación
+con restricciones (constrained Delaunay) que garantice por construcción que
+toda arista de anillo original aparece en la salida — pero eso es agregar
+una dependencia nueva, que el repo evita salvo justificación fuerte (ver
+`AGENTS.md`, política de `vendor/`). Medir primero si el caso real (~46
+huecos en un solo contorno) es común en uso real del usuario o es
+específico del fixture de prueba más denso — si es raro, puede no
+justificar el costo.
+
 ## 2026-08-06 — Resaltado por cara + fantasma de frontera coincidente bloqueaba el click en piezas 2D adyacentes
 
 ### 1. El resaltado de selección tiñe la pieza entera en vez de solo la cara
